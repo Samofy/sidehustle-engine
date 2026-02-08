@@ -7,6 +7,7 @@ import planRoutes from './routes/plan.js';
 import checkInRoutes from './routes/checkin.js';
 import mentorRoutes from './routes/mentor.js';
 import voiceRoutes from './routes/voice.js';
+import settingsRoutes from './routes/settings.js';
 import { errorHandler } from './middleware/errors.js';
 
 const app = express();
@@ -40,6 +41,7 @@ app.use('/api/tasks', planRoutes);
 app.use('/api/checkin', checkInRoutes);
 app.use('/api/mentor', mentorRoutes);
 app.use('/api/voice', voiceRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // Error handling
 app.use(errorHandler);

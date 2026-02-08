@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS users (
   last_check_in_date DATE,
   voice_enabled BOOLEAN DEFAULT FALSE,
   voice_preference VARCHAR(50) DEFAULT 'text',
+  preferred_model VARCHAR(50) DEFAULT 'claude-sonnet-4-20250514',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -87,6 +88,9 @@ CREATE INDEX IF NOT EXISTS idx_tasks_plan_phase ON tasks(plan_id, phase);
 CREATE INDEX IF NOT EXISTS idx_checkins_user_date ON check_ins(user_id, check_in_date);
 CREATE INDEX IF NOT EXISTS idx_conversations_user_type ON conversations(user_id, context_type);
 CREATE INDEX IF NOT EXISTS idx_plans_user_status ON plans(user_id, status);
+
+-- Add preferred_model column for existing databases
+ALTER TABLE users ADD COLUMN IF NOT EXISTS preferred_model VARCHAR(50) DEFAULT 'claude-sonnet-4-20250514';
 `;
 
 async function migrate() {

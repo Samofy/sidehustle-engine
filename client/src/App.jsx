@@ -6,6 +6,7 @@ import Register from './pages/Register';
 import Pathfinder from './pages/Pathfinder';
 import Dashboard from './pages/Dashboard';
 import PlanOverview from './pages/PlanOverview';
+import Settings from './pages/Settings';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -40,6 +41,7 @@ export default function App() {
           <Route path="/pathfinder" element={<ProtectedRoute><Pathfinder /></ProtectedRoute>} />
           <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
           <Route path="/plan" element={<ProtectedRoute><PlanOverview /></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AuthProvider>

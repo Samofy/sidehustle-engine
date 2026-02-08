@@ -74,6 +74,10 @@ export async function sendMentorMessage(userId, userMessage, res) {
     [userId, userMessage]
   );
 
+  // Fetch user's preferred model
+  const userResult = await pool.query('SELECT preferred_model FROM users WHERE id = $1', [userId]);
+  const preferredModel = userResult.rows[0]?.preferred_model || 'claude-sonnet-4-20250514';
+
   // Assemble context
   const context = await assembleMentorContext(userId);
   const systemPrompt = buildSystemPrompt('mentor', context);
@@ -97,6 +101,7 @@ export async function sendMentorMessage(userId, userMessage, res) {
     fullResponse = await callClaude({
       systemPrompt,
       messages,
+      model: preferredModel,
       maxTokens: 1500,
       onChunk: (chunk) => {
         res.write(`data: ${JSON.stringify({ text: chunk })}\n\n`);

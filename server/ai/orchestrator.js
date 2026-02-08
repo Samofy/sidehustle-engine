@@ -50,12 +50,12 @@ export function buildSystemPrompt(contextType, userContext = {}) {
 /**
  * Call the Claude API. Returns full response or streams via callback.
  */
-export async function callClaude({ systemPrompt, messages, onChunk, maxTokens = 2048 }) {
+export async function callClaude({ systemPrompt, messages, onChunk, maxTokens = 2048, model = 'claude-sonnet-4-20250514' }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
 
   const body = {
-    model: 'claude-sonnet-4-20250514',
+    model,
     max_tokens: maxTokens,
     system: systemPrompt,
     messages,

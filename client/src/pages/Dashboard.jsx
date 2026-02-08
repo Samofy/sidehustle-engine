@@ -18,10 +18,11 @@ export default function Dashboard() {
   const [plan, setPlan] = useState(null);
   const [loading, setLoading] = useState(true);
   const [generatingPlan, setGeneratingPlan] = useState(false);
+  const [planError, setPlanError] = useState('');
   const [showMentor, setShowMentor] = useState(false);
   const [showCheckIn, setShowCheckIn] = useState(false);
   const [energy, setEnergy] = useState(null);
-  const [needsEnergy, setNeedsEnergy] = useState(true);
+  const [needsEnergy, setNeedsEnergy] = useState(false);
 
   useEffect(() => {
     if (!user?.onboarding_complete) {
@@ -45,6 +46,16 @@ export default function Dashboard() {
 
       const arcData = await apiGet('/plan/career-arc').catch(() => null);
       if (arcData) setCareerArc(arcData);
+
+      // Check if user needs energy check-in today
+      const today = new Date().toISOString().split('T')[0];
+      const lastCheckIn = user.last_check_in_date
+        ? new Date(user.last_check_in_date).toISOString().split('T')[0]
+        : null;
+
+      if (user.total_tasks_completed > 0 && lastCheckIn !== today) {
+        setNeedsEnergy(true);
+      }
     } catch (err) {
       console.error(err);
     } finally {
@@ -54,11 +65,13 @@ export default function Dashboard() {
 
   async function handleGeneratePlan() {
     setGeneratingPlan(true);
+    setPlanError('');
     try {
       await apiPost('/plan/generate');
       await loadDashboard();
     } catch (err) {
       console.error(err);
+      setPlanError(err.message || 'Something went wrong generating your plan. Please try again.');
     } finally {
       setGeneratingPlan(false);
     }
@@ -88,6 +101,17 @@ export default function Dashboard() {
     // Check if they need a check-in (returning user)
     if (user?.total_tasks_completed > 0) {
       setShowCheckIn(true);
+    }
+  }
+
+  async function handleAdvanceDay() {
+    if (!confirm('Skip to next day? This will move your plan forward.')) return;
+    try {
+      await apiPost('/plan/advance-day');
+      await loadDashboard(); // Reload to show new day's tasks
+    } catch (err) {
+      console.error(err);
+      alert('Failed to advance day. Please try again.');
     }
   }
 
@@ -122,24 +146,41 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-surface-50">
       {/* Header */}
-      <div className="px-6 pt-8 pb-4">
+      <div className="gradient-mesh px-6 pt-8 pb-6 shadow-soft">
         <div className="max-w-lg mx-auto flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-surface-900">
               {getGreeting()}{user?.name ? `, ${user.name}` : ''}
             </h1>
             {plan && (
-              <p className="text-surface-500 mt-1 text-sm">
-                Phase {plan.phase} · Day {getDayNumber(plan.start_date)}
-              </p>
+              <div className="flex items-center gap-2 mt-1">
+                <p className="text-surface-500 text-sm">
+                  Phase {plan.phase} · Day {getDayNumber(plan.start_date)}
+                </p>
+                <button
+                  onClick={handleAdvanceDay}
+                  className="text-xs px-2 py-1 bg-brand-100 text-brand-700 rounded-lg hover:bg-brand-200 transition-colors"
+                  title="Skip to next day"
+                >
+                  → Next Day
+                </button>
+              </div>
             )}
           </div>
-          <button
-            onClick={logout}
-            className="text-sm text-surface-400 hover:text-surface-600"
-          >
-            Log out
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate('/settings')}
+              className="text-sm text-surface-400 hover:text-surface-600"
+            >
+              Settings
+            </button>
+            <button
+              onClick={logout}
+              className="text-sm text-surface-400 hover:text-surface-600"
+            >
+              Log out
+            </button>
+          </div>
         </div>
       </div>
 
@@ -153,15 +194,20 @@ export default function Dashboard() {
 
           {/* No plan yet */}
           {!plan && (
-            <div className="bg-white rounded-2xl p-8 shadow-sm border border-surface-100 text-center space-y-4">
-              <h2 className="text-xl font-semibold text-surface-900">Ready to build your plan?</h2>
+            <div className="premium-card text-center space-y-4">
+              <h2 className="text-xl font-semibold gradient-text">Ready to build your plan?</h2>
               <p className="text-surface-500">
                 Based on your Pathfinder results, I'll create a day-by-day execution plan tailored to your situation.
               </p>
+              {planError && (
+                <div className="px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm">
+                  {planError}
+                </div>
+              )}
               <button
                 onClick={handleGeneratePlan}
                 disabled={generatingPlan}
-                className="w-full py-4 bg-brand-700 text-white font-semibold rounded-2xl hover:bg-brand-800 disabled:opacity-50 active:scale-[0.98] transition-all"
+                className="premium-button w-full py-4"
               >
                 {generatingPlan ? 'Building your plan...' : 'Generate my Game Plan'}
               </button>
@@ -200,8 +246,8 @@ export default function Dashboard() {
       {/* Mentor FAB */}
       <button
         onClick={() => setShowMentor(true)}
-        className="fixed bottom-6 right-6 w-14 h-14 bg-brand-700 text-white rounded-full shadow-lg hover:bg-brand-800 active:scale-95 transition-all flex items-center justify-center z-40"
-        title="Talk to Mentor"
+        className="fixed bottom-6 right-6 w-14 h-14 bg-gradient-to-br from-brand-600 to-accent-600 text-white rounded-full shadow-glow hover:shadow-glow-lg active:scale-95 transition-all flex items-center justify-center z-40"
+        title="Talk to Mentor (Voice Enabled)"
       >
         <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />

@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { apiGet } from '../utils/api';
+import { apiGet, apiPatch, apiPost, apiDelete } from '../utils/api';
+import TaskEditModal from '../components/plan/TaskEditModal';
+import TaskCreateModal from '../components/plan/TaskCreateModal';
 
 const PHASE_NAMES = {
   1: 'Setup',
@@ -20,17 +22,46 @@ export default function PlanOverview() {
   const [plan, setPlan] = useState(null);
   const [loading, setLoading] = useState(true);
   const [expandedPhase, setExpandedPhase] = useState(null);
+  const [editingTask, setEditingTask] = useState(null);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createPhase, setCreatePhase] = useState(1);
   const navigate = useNavigate();
 
   useEffect(() => {
-    apiGet('/plan/current')
-      .then(data => {
-        setPlan(data);
-        setExpandedPhase(data.phase);
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    loadPlan();
   }, []);
+
+  async function loadPlan() {
+    try {
+      const data = await apiGet('/plan/current');
+      setPlan(data);
+      setExpandedPhase(data.phase);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSaveTask(taskId, updates) {
+    await apiPatch(`/tasks/${taskId}`, updates);
+    await loadPlan();
+  }
+
+  async function handleCreateTask(taskData) {
+    await apiPost('/plan/tasks', taskData);
+    await loadPlan();
+  }
+
+  async function handleDeleteTask(taskId) {
+    if (!confirm('Delete this task? This cannot be undone.')) return;
+    try {
+      await apiDelete(`/tasks/${taskId}`);
+      await loadPlan();
+    } catch (err) {
+      alert(err.message || 'Failed to delete task');
+    }
+  }
 
   if (loading) {
     return (
@@ -125,7 +156,7 @@ export default function PlanOverview() {
                 {isExpanded && phase.tasks.length > 0 && (
                   <div className="px-5 pb-4 space-y-2 border-t border-surface-50">
                     {phase.tasks.map((task, i) => (
-                      <div key={task.id || i} className="flex items-start gap-3 py-2">
+                      <div key={task.id || i} className="flex items-start gap-3 py-2 group">
                         <div className={`w-5 h-5 mt-0.5 rounded-full flex items-center justify-center flex-shrink-0 ${
                           task.status === 'completed'
                             ? 'bg-green-500'
@@ -149,8 +180,44 @@ export default function PlanOverview() {
                             {task.duration_minutes} min · {task.energy_level} energy
                           </p>
                         </div>
+                        {/* Edit/Delete buttons */}
+                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={() => setEditingTask(task)}
+                            className="p-1.5 text-surface-400 hover:text-brand-600 hover:bg-brand-50 rounded-lg transition-colors"
+                            title="Edit task"
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                          </button>
+                          <button
+                            onClick={() => handleDeleteTask(task.id)}
+                            className="p-1.5 text-surface-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                            title="Delete task"
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
+                        </div>
                       </div>
                     ))}
+                  </div>
+                )}
+
+                {/* Add Task Button */}
+                {isExpanded && (
+                  <div className="px-5 pb-4 border-t border-surface-50">
+                    <button
+                      onClick={() => {
+                        setCreatePhase(phase.phase);
+                        setShowCreateModal(true);
+                      }}
+                      className="w-full py-2 text-sm text-brand-600 hover:text-brand-700 font-medium hover:bg-brand-50 rounded-lg transition-colors"
+                    >
+                      + Add Task to Phase {phase.phase}
+                    </button>
                   </div>
                 )}
               </div>
@@ -158,6 +225,37 @@ export default function PlanOverview() {
           })}
         </div>
       </div>
+
+      {/* Floating Add Button */}
+      <button
+        onClick={() => {
+          setCreatePhase(plan.phase);
+          setShowCreateModal(true);
+        }}
+        className="fixed bottom-6 right-6 w-14 h-14 bg-brand-600 text-white rounded-full shadow-lg hover:bg-brand-700 active:scale-95 transition-all flex items-center justify-center z-40"
+        title="Create new task"
+      >
+        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+        </svg>
+      </button>
+
+      {/* Modals */}
+      {editingTask && (
+        <TaskEditModal
+          task={editingTask}
+          onSave={(updates) => handleSaveTask(editingTask.id, updates)}
+          onClose={() => setEditingTask(null)}
+        />
+      )}
+
+      {showCreateModal && (
+        <TaskCreateModal
+          phase={createPhase}
+          onSave={handleCreateTask}
+          onClose={() => setShowCreateModal(false)}
+        />
+      )}
     </div>
   );
 }

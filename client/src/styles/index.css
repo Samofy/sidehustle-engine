@@ -8,6 +8,8 @@ body {
   @apply bg-surface-50 text-surface-900 font-sans antialiased;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  font-size: 17px;
+  line-height: 1.6;
 }
 
 /* Smooth transitions globally */
@@ -24,4 +26,48 @@ body {
 }
 ::-webkit-scrollbar-thumb {
   @apply bg-surface-300 rounded-full;
+}
+
+/* Premium components */
+@layer components {
+  .premium-card {
+    @apply bg-white rounded-2xl p-6 shadow-soft border border-surface-100 transition-all duration-300;
+  }
+
+  .premium-card:hover {
+    @apply shadow-lg -translate-y-0.5;
+  }
+
+  .gradient-mesh {
+    background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 50%, #fdf4ff 100%);
+    position: relative;
+  }
+
+  .glass-morphism {
+    background: rgba(255, 255, 255, 0.9);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+  }
+
+  .gradient-text {
+    background: linear-gradient(135deg, #0ea5e9 0%, #d946ef 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .premium-button {
+    @apply bg-gradient-to-r from-brand-600 to-accent-600 text-white font-semibold px-6 py-3 rounded-xl shadow-soft hover:shadow-glow transition-all duration-300 active:scale-95;
+  }
+
+  .premium-button:hover {
+    @apply shadow-glow-lg;
+  }
+
+  .shimmer-effect {
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.8), transparent);
+    background-size: 200% 100%;
+    animation: shimmer 2s infinite;
+  }
 }

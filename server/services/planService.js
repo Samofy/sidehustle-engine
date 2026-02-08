@@ -18,6 +18,10 @@ export async function generatePlan(userId) {
 
   const { answers, recommendation } = user.pathfinder_data;
 
+  // Fetch user's preferred model
+  const modelResult = await pool.query('SELECT preferred_model FROM users WHERE id = $1', [userId]);
+  const preferredModel = modelResult.rows[0]?.preferred_model || 'claude-sonnet-4-20250514';
+
   const systemPrompt = buildSystemPrompt('plan', {
     userName: user.name,
     answers,
@@ -31,7 +35,7 @@ export async function generatePlan(userId) {
     },
   ];
 
-  const rawResponse = await callClaude({ systemPrompt, messages, maxTokens: 4000 });
+  const rawResponse = await callClaude({ systemPrompt, messages, model: preferredModel, maxTokens: 4000 });
 
   // Parse the JSON from Claude's response
   let planData;

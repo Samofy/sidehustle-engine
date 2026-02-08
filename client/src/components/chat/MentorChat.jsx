@@ -20,8 +20,11 @@ export default function MentorChat({ onClose }) {
       .then(data => setMessages(data.history || []))
       .catch(() => {})
       .finally(() => setLoadingHistory(false));
-    // Check voice availability
-    apiGet('/voice/status').then(d => setVoiceAvailable(d.enabled)).catch(() => {});
+    // Check voice availability and set default mode
+    apiGet('/voice/status').then(d => {
+      setVoiceAvailable(d.enabled);
+      if (d.enabled) setMode('voice');
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -145,8 +148,8 @@ export default function MentorChat({ onClose }) {
             <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-[15px] leading-relaxed ${
                 msg.role === 'user'
-                  ? 'bg-brand-700 text-white rounded-br-md'
-                  : 'bg-surface-100 text-surface-800 rounded-bl-md'
+                  ? 'bg-gradient-to-br from-brand-600 to-accent-600 text-white rounded-br-md shadow-soft'
+                  : 'glass-morphism text-surface-800 rounded-bl-md'
               }`}>
                 <p className="whitespace-pre-wrap">{msg.content}</p>
                 {msg.streaming && (
@@ -176,6 +179,7 @@ export default function MentorChat({ onClose }) {
               )}
               <MicButton
                 isRecording={voice.isRecording}
+                size="large"
                 onPress={() => {
                   voice.stopPlayback();
                   voice.startRecording();
@@ -245,7 +249,7 @@ export default function MentorChat({ onClose }) {
                 }}
                 disabled={streaming}
               />
-              <p className="text-xs text-surface-400">Hold to speak</p>
+              <p className="text-sm font-medium text-surface-500">Hold to speak</p>
             </div>
           ) : (
             <form onSubmit={handleSend} className="flex gap-2">

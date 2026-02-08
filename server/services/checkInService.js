@@ -45,6 +45,9 @@ export async function processCheckIn(userId, { energyRating, taskCompleted, skip
   // Check if it's a weekly summary day (every 7 days)
   const isWeeklySummary = context.daysIntoJourney > 0 && context.daysIntoJourney % 7 === 0;
 
+  // Fetch user's preferred model
+  const preferredModel = user.preferred_model || 'claude-sonnet-4-20250514';
+
   const systemPrompt = buildSystemPrompt('checkin', context);
   const messages = [
     {
@@ -55,7 +58,7 @@ export async function processCheckIn(userId, { energyRating, taskCompleted, skip
     },
   ];
 
-  const aiResponse = await callClaude({ systemPrompt, messages, maxTokens: 800 });
+  const aiResponse = await callClaude({ systemPrompt, messages, model: preferredModel, maxTokens: 800 });
 
   // Store check-in
   await pool.query(
