@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch index.js",
-    "start": "node index.js",
+    "start": "sh start.sh",
     "migrate": "node db/migrate.js"
   },
   "dependencies": {
