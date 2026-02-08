@@ -46,20 +46,31 @@ export async function startPathfinder(userId) {
  * Process a user's response and return the next question or recommendation.
  */
 export async function respondToPathfinder(userId, userResponse) {
-  // Store user response
-  await pool.query(
-    "INSERT INTO conversations (user_id, context_type, role, content) VALUES ($1, 'pathfinder', 'user', $2)",
-    [userId, userResponse]
-  );
-
-  // Get conversation history
+  // Get conversation history BEFORE storing to check current state
   const history = await pool.query(
     "SELECT role, content FROM conversations WHERE user_id = $1 AND context_type = 'pathfinder' ORDER BY created_at",
     [userId]
   );
 
+  const existingUserResponses = history.rows.filter(m => m.role === 'user');
+
+  // Only store the response if we haven't already collected all answers
+  // (prevents duplicate answers on retry after a failed recommendation generation)
+  if (existingUserResponses.length < PATHFINDER_QUESTIONS.length) {
+    await pool.query(
+      "INSERT INTO conversations (user_id, context_type, role, content) VALUES ($1, 'pathfinder', 'user', $2)",
+      [userId, userResponse]
+    );
+  }
+
+  // Re-query to get updated history
+  const updatedHistory = await pool.query(
+    "SELECT role, content FROM conversations WHERE user_id = $1 AND context_type = 'pathfinder' ORDER BY created_at",
+    [userId]
+  );
+
   // Count user responses to determine which question we're on
-  const userResponses = history.rows.filter(m => m.role === 'user');
+  const userResponses = updatedHistory.rows.filter(m => m.role === 'user');
   const questionIndex = userResponses.length; // 0-indexed, but we've already added the current one
 
   // If we haven't asked all questions yet, return the next one
@@ -94,7 +105,17 @@ export async function respondToPathfinder(userId, userResponse) {
     }
   ];
 
-  const recommendation = await callClaude({ systemPrompt, messages, maxTokens: 1500 });
+  let recommendation;
+  try {
+    recommendation = await callClaude({ systemPrompt, messages, maxTokens: 1500 });
+  } catch (err) {
+    console.error('[Pathfinder] Claude API failed for user', userId, err.message);
+    throw new Error('Failed to generate recommendation. Please try again.');
+  }
+
+  if (!recommendation) {
+    throw new Error('Received empty recommendation. Please try again.');
+  }
 
   // Store recommendation
   await pool.query(

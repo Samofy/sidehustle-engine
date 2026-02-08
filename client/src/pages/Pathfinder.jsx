@@ -66,6 +66,7 @@ export default function Pathfinder() {
   const [recommendation, setRecommendation] = useState('');
   const [loadingMessage, setLoadingMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
   const inputRef = useRef(null);
   const navigate = useNavigate();
   const { user, setUser } = useAuth();
@@ -117,8 +118,8 @@ export default function Pathfinder() {
     if (!answer.trim() || submitting) return;
 
     setSubmitting(true);
+    setError('');
     const currentAnswer = answer;
-    setAnswer('');
 
     try {
       if (questionNumber >= totalQuestions) {
@@ -128,16 +129,23 @@ export default function Pathfinder() {
       const data = await apiPost('/pathfinder/respond', { response: currentAnswer });
 
       if (data.isComplete) {
+        setAnswer('');
         setRecommendation(data.recommendation);
         setStage('recommendation');
         setUser(prev => ({ ...prev, onboarding_complete: true }));
       } else {
+        setAnswer('');
         setQuestion(data.question);
         setQuestionNumber(data.questionNumber);
         setStage('question');
       }
     } catch (err) {
       console.error(err);
+      if (questionNumber >= totalQuestions) {
+        setError('Something went wrong generating your recommendation. Please try again.');
+      } else {
+        setError('Something went wrong. Please try again.');
+      }
       setStage('question');
     } finally {
       setSubmitting(false);
@@ -210,6 +218,11 @@ export default function Pathfinder() {
           </h2>
 
           <form onSubmit={handleSubmit} className="space-y-4 animate-fadeIn">
+            {error && (
+              <div className="px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm">
+                {error}
+              </div>
+            )}
             <textarea
               ref={inputRef}
               value={answer}
