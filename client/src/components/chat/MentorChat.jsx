@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { apiGet, apiRawFetch } from '../../utils/api';
 import useVoice from '../../hooks/useVoice';
-import VoiceModeToggle from '../voice/VoiceModeToggle';
 import MicButton from '../voice/MicButton';
 
 export default function MentorChat({ onClose }) {
@@ -9,7 +8,6 @@ export default function MentorChat({ onClose }) {
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(true);
-  const [mode, setMode] = useState('text'); // text | voice
   const [voiceAvailable, setVoiceAvailable] = useState(false);
   const voice = useVoice();
   const messagesEndRef = useRef(null);
@@ -20,10 +18,9 @@ export default function MentorChat({ onClose }) {
       .then(data => setMessages(data.history || []))
       .catch(() => {})
       .finally(() => setLoadingHistory(false));
-    // Check voice availability and set default mode
+    // Check voice availability
     apiGet('/voice/status').then(d => {
       setVoiceAvailable(d.enabled);
-      if (d.enabled) setMode('voice');
     }).catch(() => {});
   }, []);
 
@@ -109,16 +106,14 @@ export default function MentorChat({ onClose }) {
         <div className="flex items-center justify-between px-5 py-4 border-b border-surface-100">
           <div>
             <h2 className="font-semibold text-surface-900">Your Mentor</h2>
-            <p className="text-xs text-surface-400">Ask anything about your business</p>
+            <p className="text-xs text-surface-400">
+              {voiceAvailable ? 'Type or speak your question' : 'Ask anything about your business'}
+            </p>
           </div>
-          <div className="flex items-center gap-2">
-            {voiceAvailable && (
-              <VoiceModeToggle mode={mode} onToggle={setMode} disabled={streaming} />
-            )}
-            <button
-              onClick={onClose}
-              className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-100 text-surface-400"
-            >
+          <button
+            onClick={onClose}
+            className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-100 text-surface-400"
+          >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
@@ -167,19 +162,37 @@ export default function MentorChat({ onClose }) {
             <p className="text-xs text-red-500 mb-2 text-center">{voice.error}</p>
           )}
 
-          {mode === 'voice' ? (
-            <div className="flex flex-col items-center gap-2 py-2">
+          {/* Voice feedback */}
+          {voiceAvailable && (
+            <>
               {voice.transcript && (
-                <p className="text-sm text-surface-600 bg-surface-50 px-3 py-1.5 rounded-lg max-w-full truncate">
+                <p className="text-sm text-surface-600 bg-surface-50 px-3 py-1.5 rounded-lg mb-2 truncate">
                   {voice.transcript}
                 </p>
               )}
               {voice.isPlaying && (
-                <p className="text-xs text-brand-600 animate-pulse">Speaking...</p>
+                <p className="text-xs text-brand-600 animate-pulse mb-2 text-center">Speaking...</p>
               )}
+            </>
+          )}
+
+          {/* Text input with voice button */}
+          <form onSubmit={handleSend} className="flex gap-2 items-end">
+            <input
+              ref={inputRef}
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder={voiceAvailable ? "Type or hold mic to speak..." : "Ask your mentor..."}
+              disabled={streaming}
+              className="flex-1 px-4 py-3 rounded-xl border border-surface-200 bg-white focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent text-surface-900 disabled:opacity-50"
+            />
+
+            {/* Voice button - always visible when available */}
+            {voiceAvailable && (
               <MicButton
                 isRecording={voice.isRecording}
-                size="large"
+                size="default"
                 onPress={() => {
                   voice.stopPlayback();
                   voice.startRecording();
@@ -187,10 +200,7 @@ export default function MentorChat({ onClose }) {
                 onRelease={async () => {
                   const transcript = await voice.stopRecording();
                   if (transcript) {
-                    setInput(transcript);
                     // Auto-send voice message
-                    const fakeEvent = { preventDefault: () => {} };
-                    setInput('');
                     setMessages(prev => [...prev, { role: 'user', content: transcript }]);
                     setStreaming(true);
                     setMessages(prev => [...prev, { role: 'assistant', content: '', streaming: true }]);
@@ -249,30 +259,19 @@ export default function MentorChat({ onClose }) {
                 }}
                 disabled={streaming}
               />
-              <p className="text-sm font-medium text-surface-500">Hold to speak</p>
-            </div>
-          ) : (
-            <form onSubmit={handleSend} className="flex gap-2">
-              <input
-                ref={inputRef}
-                type="text"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="Ask your mentor..."
-                disabled={streaming}
-                className="flex-1 px-4 py-3 rounded-xl border border-surface-200 bg-white focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent text-surface-900 disabled:opacity-50"
-              />
-              <button
-                type="submit"
-                disabled={!input.trim() || streaming}
-                className="w-12 h-12 bg-brand-700 text-white rounded-xl hover:bg-brand-800 disabled:opacity-40 flex items-center justify-center flex-shrink-0 active:scale-95 transition-all"
-              >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                </svg>
-              </button>
-            </form>
-          )}
+            )}
+
+            {/* Send button */}
+            <button
+              type="submit"
+              disabled={!input.trim() || streaming}
+              className="w-12 h-12 bg-gradient-to-br from-brand-600 to-accent-600 text-white rounded-xl hover:shadow-glow disabled:opacity-40 flex items-center justify-center flex-shrink-0 active:scale-95 transition-all"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+              </svg>
+            </button>
+          </form>
         </div>
       </div>
     </div>
