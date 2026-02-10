@@ -6,7 +6,7 @@ const ENERGY_BADGES = {
   high: { label: 'High energy', color: 'bg-orange-100 text-orange-700' },
 };
 
-export default function TaskCard({ task, onComplete, onAskMentor }) {
+export default function TaskCard({ task, onComplete, onAskMentor, onStartTimer }) {
   const [completing, setCompleting] = useState(false);
   const isCompleted = task.status === 'completed';
   const isSkipped = task.status === 'skipped';
@@ -64,14 +64,24 @@ export default function TaskCard({ task, onComplete, onAskMentor }) {
         )}
       </div>
 
-      {/* Help button */}
+      {/* Action buttons */}
       {!isCompleted && !isSkipped && (
-        <button
-          onClick={onAskMentor}
-          className="mt-3 text-sm text-brand-600 hover:text-brand-700 font-medium"
-        >
-          Help with this task →
-        </button>
+        <div className="mt-3 flex gap-3">
+          {onStartTimer && (
+            <button
+              onClick={onStartTimer}
+              className="flex-1 text-sm bg-purple-500 hover:bg-purple-600 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+            >
+              ⏱️ Start Timer
+            </button>
+          )}
+          <button
+            onClick={onAskMentor}
+            className="flex-1 text-sm text-brand-600 hover:text-brand-700 font-medium"
+          >
+            Help with this task →
+          </button>
+        </div>
       )}
     </div>
   );

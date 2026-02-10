@@ -3,11 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { apiGet, apiPost, apiPatch } from '../utils/api';
 import TaskCard from '../components/dashboard/TaskCard';
+import TaskTimer from '../components/dashboard/TaskTimer';
 import CareerArcCounter from '../components/dashboard/CareerArcCounter';
 import StreakDisplay from '../components/dashboard/StreakDisplay';
 import EnergyRating from '../components/checkin/EnergyRating';
 import CheckInFlow from '../components/checkin/CheckInFlow';
 import MentorChat from '../components/chat/MentorChat';
+import VoiceAgentPanel from '../components/voice/VoiceAgentPanel';
 
 export default function Dashboard() {
   const { user, logout, setUser } = useAuth();
@@ -23,6 +25,8 @@ export default function Dashboard() {
   const [showCheckIn, setShowCheckIn] = useState(false);
   const [energy, setEnergy] = useState(null);
   const [needsEnergy, setNeedsEnergy] = useState(false);
+  const [activeTimer, setActiveTimer] = useState(null);
+  const [showVoiceAgent, setShowVoiceAgent] = useState(false);
 
   useEffect(() => {
     if (!user?.onboarding_complete) {
@@ -135,8 +139,11 @@ export default function Dashboard() {
     return (
       <CheckInFlow
         energy={energy}
-        onComplete={() => {
+        onComplete={async () => {
           setShowCheckIn(false);
+          // Refresh user state to get updated last_check_in_date
+          const userData = await apiGet('/auth/me');
+          setUser(userData.user);
           loadDashboard();
         }}
       />
@@ -219,14 +226,27 @@ export default function Dashboard() {
             <div className="space-y-3">
               <h2 className="text-lg font-semibold text-surface-900">Today's Focus</h2>
               {tasks.map((task) => (
-                <TaskCard
-                  key={task.id}
-                  task={task}
-                  onComplete={() => handleCompleteTask(task.id)}
-                  onAskMentor={() => {
-                    setShowMentor(true);
-                  }}
-                />
+                activeTimer === task.id ? (
+                  <TaskTimer
+                    key={task.id}
+                    task={task}
+                    onComplete={async () => {
+                      await handleCompleteTask(task.id);
+                      setActiveTimer(null);
+                    }}
+                    onCancel={() => setActiveTimer(null)}
+                  />
+                ) : (
+                  <TaskCard
+                    key={task.id}
+                    task={task}
+                    onComplete={() => handleCompleteTask(task.id)}
+                    onAskMentor={() => {
+                      setShowMentor(true);
+                    }}
+                    onStartTimer={() => setActiveTimer(task.id)}
+                  />
+                )
               ))}
             </div>
           )}
@@ -243,19 +263,38 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Mentor FAB */}
-      <button
-        onClick={() => setShowMentor(true)}
-        className="fixed bottom-6 right-6 w-14 h-14 bg-gradient-to-br from-brand-600 to-accent-600 text-white rounded-full shadow-glow hover:shadow-glow-lg active:scale-95 transition-all flex items-center justify-center z-40"
-        title="Talk to Mentor (Voice Enabled)"
-      >
-        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-        </svg>
-      </button>
+      {/* Action Buttons */}
+      <div className="fixed bottom-6 right-6 flex flex-col gap-3 z-40">
+        {/* Voice Agent FAB */}
+        <button
+          onClick={() => setShowVoiceAgent(!showVoiceAgent)}
+          className={`w-14 h-14 rounded-full shadow-glow hover:shadow-glow-lg active:scale-95 transition-all flex items-center justify-center ${
+            showVoiceAgent
+              ? 'bg-gradient-to-br from-purple-600 to-purple-800'
+              : 'bg-gradient-to-br from-purple-500 to-purple-700'
+          } text-white`}
+          title="Voice Agent (Continuous Conversation)"
+        >
+          <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clipRule="evenodd" />
+          </svg>
+        </button>
 
-      {/* Mentor Chat Panel */}
+        {/* Mentor Chat FAB */}
+        <button
+          onClick={() => setShowMentor(true)}
+          className="w-14 h-14 bg-gradient-to-br from-brand-600 to-accent-600 text-white rounded-full shadow-glow hover:shadow-glow-lg active:scale-95 transition-all flex items-center justify-center"
+          title="Text Chat with Mentor"
+        >
+          <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+          </svg>
+        </button>
+      </div>
+
+      {/* Panels */}
       {showMentor && <MentorChat onClose={() => setShowMentor(false)} />}
+      {showVoiceAgent && <VoiceAgentPanel onClose={() => setShowVoiceAgent(false)} />}
     </div>
   );
 }

@@ -4,7 +4,7 @@ import { buildSystemPrompt, callClaude } from '../ai/orchestrator.js';
 /**
  * Assemble full user context for the Mentor.
  */
-async function assembleMentorContext(userId) {
+export async function assembleMentorContext(userId) {
   // User profile
   const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
   const user = userResult.rows[0];
@@ -50,13 +50,14 @@ async function assembleMentorContext(userId) {
       earned: Math.round(totalHours * 507 * 100) / 100,
     },
     onboardingData: user.pathfinder_data || {},
+    mentorPersonality: user.mentor_personality || 'balanced',
   };
 }
 
 /**
  * Get conversation history for the mentor.
  */
-async function getConversationHistory(userId, limit = 15) {
+export async function getConversationHistory(userId, limit = 15) {
   const result = await pool.query(
     "SELECT role, content FROM conversations WHERE user_id = $1 AND context_type = 'mentor' ORDER BY created_at DESC LIMIT $2",
     [userId, limit]

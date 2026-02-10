@@ -26,7 +26,7 @@ router.post('/register', async (req, res, next) => {
 
     const passwordHash = await bcrypt.hash(password, 12);
     const result = await pool.query(
-      'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id, email, name, onboarding_complete, current_phase, current_streak, total_tasks_completed',
+      'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id, email, name, onboarding_complete, current_phase, current_streak, total_tasks_completed, last_check_in_date',
       [email.toLowerCase(), passwordHash, name]
     );
 
@@ -73,7 +73,7 @@ router.post('/login', async (req, res, next) => {
 router.get('/me', authMiddleware, async (req, res, next) => {
   try {
     const result = await pool.query(
-      'SELECT id, email, name, onboarding_complete, current_phase, current_streak, longest_streak, total_tasks_completed, total_hours_logged, voice_enabled, voice_preference, created_at FROM users WHERE id = $1',
+      'SELECT id, email, name, onboarding_complete, current_phase, current_streak, longest_streak, total_tasks_completed, total_hours_logged, voice_enabled, voice_preference, last_check_in_date, created_at FROM users WHERE id = $1',
       [req.userId]
     );
 

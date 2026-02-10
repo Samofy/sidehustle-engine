@@ -159,23 +159,38 @@ export async function getTodaysTasks(userId, energyRating = null) {
  * Complete a task.
  */
 export async function completeTask(userId, taskId) {
-  const result = await pool.query(
-    `UPDATE tasks SET status = 'completed', completed_at = NOW() 
-     WHERE id = $1 AND user_id = $2 
+  // First, calculate actual duration if timer was used
+  const updateResult = await pool.query(
+    `UPDATE tasks SET
+       status = 'completed',
+       completed_at = NOW(),
+       actual_duration_seconds = CASE
+         WHEN started_at IS NOT NULL THEN
+           EXTRACT(EPOCH FROM (NOW() - started_at))::INTEGER - COALESCE(total_paused_seconds, 0)
+         ELSE NULL
+       END
+     WHERE id = $1 AND user_id = $2
      RETURNING *`,
     [taskId, userId]
   );
 
-  if (result.rows.length === 0) {
+  if (updateResult.rows.length === 0) {
     throw new Error('Task not found.');
   }
 
-  const task = result.rows[0];
+  const task = updateResult.rows[0];
+
+  // Calculate hours to add (use actual duration if timer was used, otherwise use estimated duration)
+  let hoursToAdd;
+  if (task.actual_duration_seconds && task.actual_duration_seconds > 0) {
+    hoursToAdd = task.actual_duration_seconds / 3600;
+  } else {
+    hoursToAdd = (task.duration_minutes || 30) / 60;
+  }
 
   // Update user stats
-  const hoursToAdd = (task.duration_minutes || 30) / 60;
   await pool.query(
-    `UPDATE users SET 
+    `UPDATE users SET
        total_tasks_completed = total_tasks_completed + 1,
        total_hours_logged = total_hours_logged + $1,
        current_streak = current_streak + 1,

@@ -91,6 +91,15 @@ CREATE INDEX IF NOT EXISTS idx_plans_user_status ON plans(user_id, status);
 
 -- Add preferred_model column for existing databases
 ALTER TABLE users ADD COLUMN IF NOT EXISTS preferred_model VARCHAR(50) DEFAULT 'claude-sonnet-4-20250514';
+
+-- Add timer fields to tasks table
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS paused_at TIMESTAMPTZ;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS total_paused_seconds INTEGER DEFAULT 0;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS actual_duration_seconds INTEGER;
+
+-- Add mentor personality to users table
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mentor_personality VARCHAR(50) DEFAULT 'balanced';
 `;
 
 async function migrate() {

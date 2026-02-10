@@ -217,4 +217,62 @@ router.post('/advance-day', authMiddleware, async (req, res, next) => {
   }
 });
 
+// POST /api/tasks/:id/start-timer — Start timer for a task
+router.post('/:id/start-timer', authMiddleware, async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      'UPDATE tasks SET started_at = NOW(), paused_at = NULL WHERE id = $1 AND user_id = $2 RETURNING *',
+      [req.params.id, req.userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Task not found or access denied.' });
+    }
+
+    res.json({ task: result.rows[0] });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/tasks/:id/pause-timer — Pause timer for a task
+router.post('/:id/pause-timer', authMiddleware, async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      `UPDATE tasks SET
+         paused_at = NOW(),
+         total_paused_seconds = total_paused_seconds + EXTRACT(EPOCH FROM (NOW() - COALESCE(started_at, NOW())))::INTEGER
+       WHERE id = $1 AND user_id = $2 AND started_at IS NOT NULL AND paused_at IS NULL
+       RETURNING *`,
+      [req.params.id, req.userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Task not found, not started, or already paused.' });
+    }
+
+    res.json({ task: result.rows[0] });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/tasks/:id/resume-timer — Resume a paused timer
+router.post('/:id/resume-timer', authMiddleware, async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      'UPDATE tasks SET started_at = NOW(), paused_at = NULL WHERE id = $1 AND user_id = $2 AND paused_at IS NOT NULL RETURNING *',
+      [req.params.id, req.userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Task not found, not paused, or access denied.' });
+    }
+
+    res.json({ task: result.rows[0] });
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;

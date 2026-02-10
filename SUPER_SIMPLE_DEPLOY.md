@@ -41,7 +41,7 @@ git branch -m main
 *(Press Enter)*
 
 ```bash
-git config user.email "admin@wissam.co.nz"
+git config user.email "w.yassona@gmail.com"
 ```
 *(Press Enter)*
 

@@ -8,7 +8,7 @@ const router = Router();
 router.get('/', authMiddleware, async (req, res, next) => {
   try {
     const result = await pool.query(
-      'SELECT email, name, voice_enabled, voice_preference, preferred_model, created_at FROM users WHERE id = $1',
+      'SELECT email, name, voice_enabled, voice_preference, preferred_model, mentor_personality, created_at FROM users WHERE id = $1',
       [req.userId]
     );
 
@@ -25,7 +25,7 @@ router.get('/', authMiddleware, async (req, res, next) => {
 // PATCH /api/settings/preferences
 router.patch('/preferences', authMiddleware, async (req, res, next) => {
   try {
-    const { voice_enabled, voice_preference, preferred_model } = req.body;
+    const { voice_enabled, voice_preference, preferred_model, mentor_personality } = req.body;
 
     // Validate preferred_model if provided
     const validModels = [
@@ -36,6 +36,12 @@ router.patch('/preferences', authMiddleware, async (req, res, next) => {
 
     if (preferred_model && !validModels.includes(preferred_model)) {
       return res.status(400).json({ error: 'Invalid model selection.' });
+    }
+
+    // Validate mentor_personality if provided
+    const validPersonalities = ['harsh', 'balanced', 'supportive'];
+    if (mentor_personality && !validPersonalities.includes(mentor_personality)) {
+      return res.status(400).json({ error: 'Invalid personality selection.' });
     }
 
     // Build dynamic update query
@@ -58,12 +64,17 @@ router.patch('/preferences', authMiddleware, async (req, res, next) => {
       values.push(preferred_model);
     }
 
+    if (mentor_personality) {
+      updates.push(`mentor_personality = $${paramCount++}`);
+      values.push(mentor_personality);
+    }
+
     if (updates.length === 0) {
       return res.status(400).json({ error: 'No valid updates provided.' });
     }
 
     values.push(req.userId);
-    const query = `UPDATE users SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${paramCount} RETURNING voice_enabled, voice_preference, preferred_model`;
+    const query = `UPDATE users SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${paramCount} RETURNING voice_enabled, voice_preference, preferred_model, mentor_personality`;
 
     const result = await pool.query(query, values);
 

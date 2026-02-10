@@ -191,6 +191,63 @@ export default function Settings() {
             </div>
           </div>
 
+          {/* Mentor Personality */}
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-surface-100">
+            <h2 className="text-lg font-semibold text-surface-900 mb-4">Mentor Personality</h2>
+            <p className="text-sm text-surface-500 mb-4">
+              Choose how your mentor communicates and motivates you.
+            </p>
+            <div className="space-y-3">
+              {[
+                {
+                  value: 'harsh',
+                  label: 'Harsh & Motivating',
+                  description: 'Direct, demanding, results-focused. Pushes hard on accountability.',
+                  emoji: '💪'
+                },
+                {
+                  value: 'balanced',
+                  label: 'Balanced (Default)',
+                  description: 'Mix of encouragement and tough love. Adapts to your energy.',
+                  emoji: '⚖️'
+                },
+                {
+                  value: 'supportive',
+                  label: 'Supportive & Patient',
+                  description: 'Extra encouraging. Celebrates wins. Focus on progress over perfection.',
+                  emoji: '🤝'
+                }
+              ].map(option => (
+                <label
+                  key={option.value}
+                  className={`block p-4 border-2 rounded-xl cursor-pointer transition-all ${
+                    (settings.mentor_personality || 'balanced') === option.value
+                      ? 'border-purple-500 bg-purple-50'
+                      : 'border-surface-200 hover:border-surface-300'
+                  }`}
+                >
+                  <div className="flex items-start">
+                    <input
+                      type="radio"
+                      name="personality"
+                      value={option.value}
+                      checked={(settings.mentor_personality || 'balanced') === option.value}
+                      onChange={(e) => handleSavePreferences({ mentor_personality: e.target.value })}
+                      disabled={saving}
+                      className="mt-1 mr-3"
+                    />
+                    <div className="flex-1">
+                      <div className="font-medium text-surface-900">
+                        {option.emoji} {option.label}
+                      </div>
+                      <div className="text-sm text-surface-500">{option.description}</div>
+                    </div>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </div>
+
           {/* Danger Zone */}
           <div className="bg-red-50 rounded-2xl p-6 border-2 border-red-200">
             <h2 className="text-lg font-semibold text-red-900 mb-2">Danger Zone</h2>

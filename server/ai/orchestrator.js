@@ -35,6 +35,14 @@ export function buildSystemPrompt(contextType, userContext = {}) {
       break;
     case 'mentor':
       system += prompts.mentor;
+
+      // Inject personality override for mentor context
+      if (userContext.mentorPersonality === 'harsh') {
+        system += '\n\n## PERSONALITY OVERRIDE\nBe more direct, demanding, and results-focused. Push harder on accountability. No coddling. Use tough love to drive action.';
+      } else if (userContext.mentorPersonality === 'supportive') {
+        system += '\n\n## PERSONALITY OVERRIDE\nBe extra encouraging and patient. Focus on progress over perfection. Celebrate small wins. Provide reassurance and positive reinforcement.';
+      }
+      // 'balanced' uses default mentor prompt without override
       break;
   }
 

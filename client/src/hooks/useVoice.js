@@ -79,7 +79,8 @@ export default function useVoice() {
 
   const playAudio = useCallback(async (text) => {
     try {
-      const res = await apiRawFetch('/voice/speak', {
+      // Use streaming endpoint for faster response
+      const res = await apiRawFetch('/voice/speak-stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
@@ -87,28 +88,74 @@ export default function useVoice() {
 
       if (!res.ok) throw new Error('TTS failed');
 
-      const audioBlob = await res.blob();
-      const audioUrl = URL.createObjectURL(audioBlob);
+      // For streaming audio, we collect chunks and start playback ASAP
+      const reader = res.body.getReader();
+      const chunks = [];
+      let audioStarted = false;
+      let audioUrl = null;
 
+      // Stop any existing playback
       if (audioRef.current) {
         audioRef.current.pause();
       }
 
-      const audio = new Audio(audioUrl);
-      audioRef.current = audio;
       setIsPlaying(true);
 
-      audio.onended = () => {
-        setIsPlaying(false);
-        URL.revokeObjectURL(audioUrl);
-      };
+      // Read stream and buffer chunks
+      while (true) {
+        const { done, value } = await reader.read();
 
-      audio.onerror = () => {
-        setIsPlaying(false);
-        URL.revokeObjectURL(audioUrl);
-      };
+        if (value) {
+          chunks.push(value);
 
-      await audio.play();
+          // Start playback as soon as we have enough data (~3 chunks = ~30KB)
+          if (chunks.length === 3 && !audioStarted) {
+            audioStarted = true;
+
+            // Create blob from buffered chunks and start playing
+            const audioBlob = new Blob(chunks, { type: 'audio/mpeg' });
+            audioUrl = URL.createObjectURL(audioBlob);
+
+            const audio = new Audio(audioUrl);
+            audioRef.current = audio;
+
+            audio.onended = () => {
+              setIsPlaying(false);
+              if (audioUrl) URL.revokeObjectURL(audioUrl);
+            };
+
+            audio.onerror = () => {
+              setIsPlaying(false);
+              if (audioUrl) URL.revokeObjectURL(audioUrl);
+            };
+
+            await audio.play();
+          }
+        }
+
+        if (done) break;
+      }
+
+      // If we didn't start playback yet (small audio), play the complete audio
+      if (!audioStarted && chunks.length > 0) {
+        const audioBlob = new Blob(chunks, { type: 'audio/mpeg' });
+        audioUrl = URL.createObjectURL(audioBlob);
+
+        const audio = new Audio(audioUrl);
+        audioRef.current = audio;
+
+        audio.onended = () => {
+          setIsPlaying(false);
+          URL.revokeObjectURL(audioUrl);
+        };
+
+        audio.onerror = () => {
+          setIsPlaying(false);
+          URL.revokeObjectURL(audioUrl);
+        };
+
+        await audio.play();
+      }
     } catch (err) {
       setIsPlaying(false);
       console.error('Audio playback error:', err);

@@ -3,6 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createServer } from 'http';
 import authRoutes from './routes/auth.js';
 import pathfinderRoutes from './routes/pathfinder.js';
 import planRoutes from './routes/plan.js';
@@ -11,6 +12,7 @@ import mentorRoutes from './routes/mentor.js';
 import voiceRoutes from './routes/voice.js';
 import settingsRoutes from './routes/settings.js';
 import { errorHandler } from './middleware/errors.js';
+import { setupVoiceAgent } from './voice/voiceAgent.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -69,7 +71,11 @@ app.get('*', (req, res, next) => {
 // Error handling
 app.use(errorHandler);
 
-app.listen(PORT, () => {
+// Create HTTP server and setup WebSocket for voice agent
+const server = createServer(app);
+setupVoiceAgent(server);
+
+server.listen(PORT, () => {
   console.log(`🚀 SideHustle Engine API running on port ${PORT}`);
 });
 
