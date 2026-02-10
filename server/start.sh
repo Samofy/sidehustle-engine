@@ -1,18 +1,10 @@
 #!/bin/sh
 
-# Get the directory where this script is located
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-
-# Build client first
-echo "Building client..."
-cd "$PROJECT_ROOT/client" || exit 1
-npm install
-npm run build
-echo "Client build complete!"
-
-# Go back to server directory
-cd "$SCRIPT_DIR" || exit 1
+# Simple approach - try to find and build client if it exists
+if [ -d "../client" ]; then
+  echo "Building client..."
+  (cd ../client && npm install && npm run build) || echo "Warning: Client build failed, continuing anyway..."
+fi
 
 # Run migrations
 echo "Running database migrations..."
