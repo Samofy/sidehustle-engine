@@ -1,9 +1,7 @@
 import { createContext, useContext, useState, useEffect } from 'react';
-import { apiBase } from '../utils/api';
+import { apiPost, apiGet } from '../utils/api';
 
 const AuthContext = createContext(null);
-
-const API = `${apiBase}/auth`;
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -11,40 +9,26 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     const token = localStorage.getItem('token');
-    if (token) {
-      fetch(`${API}/me`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-        .then((res) => (res.ok ? res.json() : Promise.reject()))
-        .then((data) => setUser(data.user))
-        .catch(() => localStorage.removeItem('token'))
-        .finally(() => setLoading(false));
-    } else {
+    if (!token) {
       setLoading(false);
+      return;
     }
+
+    apiGet('/auth/me')
+      .then((data) => setUser(data.user))
+      .catch(() => localStorage.removeItem('token'))
+      .finally(() => setLoading(false));
   }, []);
 
   async function register(email, password, name) {
-    const res = await fetch(`${API}/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, name }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Registration failed');
+    const data = await apiPost('/auth/register', { email, password, name });
     localStorage.setItem('token', data.token);
     setUser(data.user);
     return data;
   }
 
   async function login(email, password) {
-    const res = await fetch(`${API}/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Login failed');
+    const data = await apiPost('/auth/login', { email, password });
     localStorage.setItem('token', data.token);
     setUser(data.user);
     return data;

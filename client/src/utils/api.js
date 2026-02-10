@@ -1,7 +1,19 @@
-// Use Railway API URL in production, relative path in development
 const BASE = import.meta.env.VITE_API_URL || '/api';
 
 export { BASE as apiBase };
+
+async function parseJSON(res) {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(
+      res.ok
+        ? 'Received an unexpected response from the server.'
+        : `Server error (${res.status}). Please try again.`
+    );
+  }
+}
 
 export async function apiFetch(path, options = {}) {
   const token = localStorage.getItem('token');
@@ -12,7 +24,7 @@ export async function apiFetch(path, options = {}) {
   };
 
   const res = await fetch(`${BASE}${path}`, { ...options, headers });
-  const data = await res.json();
+  const data = await parseJSON(res);
 
   if (!res.ok) {
     throw new Error(data.error || `Request failed: ${res.status}`);
@@ -21,9 +33,6 @@ export async function apiFetch(path, options = {}) {
   return data;
 }
 
-/**
- * Fetch that returns the raw Response (for SSE streaming, binary audio, etc.)
- */
 export async function apiRawFetch(path, options = {}) {
   const token = localStorage.getItem('token');
   const headers = {
