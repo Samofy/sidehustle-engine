@@ -1,4 +1,13 @@
 #!/bin/sh
+
+# Build client first
+echo "Building client..."
+cd ../client
+npm install
+npm run build
+cd ../server
+
+# Run migrations
 echo "Running database migrations..."
 node db/migrate.js
 
