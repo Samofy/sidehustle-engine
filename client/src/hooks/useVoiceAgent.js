@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { getWsBase } from '../utils/api';
 
 export default function useVoiceAgent() {
   const [isConnected, setIsConnected] = useState(false);
@@ -14,15 +15,10 @@ export default function useVoiceAgent() {
   const audioContextRef = useRef(null);
   const audioChunksRef = useRef([]);
 
-  // Get WebSocket URL
+  // Get WebSocket URL — must point to Railway, not Vercel (Vercel doesn't support WS)
   const getWsUrl = useCallback(() => {
     const token = localStorage.getItem('token');
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-
-    // Use current host (works for both localhost and Railway)
-    const host = window.location.host;
-
-    const wsUrl = `${protocol}//${host}/voice-agent?token=${token}`;
+    const wsUrl = `${getWsBase()}/voice-agent?token=${token}`;
     console.log('🔗 Connecting to voice agent:', wsUrl);
     return wsUrl;
   }, []);

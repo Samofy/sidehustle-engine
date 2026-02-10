@@ -2,6 +2,20 @@ const BASE = import.meta.env.VITE_API_URL || '/api';
 
 export { BASE as apiBase };
 
+// Derive the WebSocket base URL from the API URL
+// e.g. "https://foo.railway.app/api" → "wss://foo.railway.app"
+export function getWsBase() {
+  try {
+    const url = new URL(BASE);
+    const protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${protocol}//${url.host}`;
+  } catch {
+    // Relative URL (dev mode) — use current page host
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${protocol}//${window.location.host}`;
+  }
+}
+
 async function parseJSON(res) {
   const text = await res.text();
   try {

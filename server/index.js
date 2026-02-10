@@ -32,8 +32,9 @@ app.use(cors({
   },
   credentials: true,
 }));
-app.use(express.json({ limit: '1mb' }));
+// Raw body parser for audio MUST come before JSON parser
 app.use('/api/voice/transcribe', express.raw({ type: 'audio/*', limit: '10mb' }));
+app.use(express.json({ limit: '1mb' }));
 
 // Health check
 app.get('/api/health', (req, res) => {
