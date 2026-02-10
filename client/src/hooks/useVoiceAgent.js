@@ -18,10 +18,13 @@ export default function useVoiceAgent() {
   const getWsUrl = useCallback(() => {
     const token = localStorage.getItem('token');
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = import.meta.env.VITE_API_URL
-      ? import.meta.env.VITE_API_URL.replace('http://', '').replace('https://', '')
-      : 'localhost:3001';
-    return `${protocol}//${host}/voice-agent?token=${token}`;
+
+    // Use current host (works for both localhost and Railway)
+    const host = window.location.host;
+
+    const wsUrl = `${protocol}//${host}/voice-agent?token=${token}`;
+    console.log('🔗 Connecting to voice agent:', wsUrl);
+    return wsUrl;
   }, []);
 
   // Connect to voice agent
@@ -164,33 +167,48 @@ export default function useVoiceAgent() {
 
   // Activate voice agent
   const activate = useCallback(async () => {
+    console.log('🎙️ Activating voice agent...');
+    console.log('WebSocket state:', wsRef.current?.readyState);
+
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      setError('Not connected to voice agent');
+      const errorMsg = 'Not connected to voice agent. Connection state: ' + (wsRef.current?.readyState || 'null');
+      console.error('❌', errorMsg);
+      setError(errorMsg);
       return;
     }
 
     try {
+      console.log('🎤 Requesting microphone access...');
       // Request microphone access
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      console.log('✅ Microphone access granted');
+
       const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
 
       let audioChunks = [];
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
+          console.log('📦 Audio chunk received:', event.data.size, 'bytes');
           audioChunks.push(event.data);
         }
       };
 
       // Send audio when recorder stops
       mediaRecorder.onstop = async () => {
-        if (audioChunks.length === 0) return;
+        console.log('🛑 Recording stopped, total chunks:', audioChunks.length);
+        if (audioChunks.length === 0) {
+          console.warn('⚠️ No audio chunks to send');
+          return;
+        }
 
         const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+        console.log('📤 Sending audio blob:', audioBlob.size, 'bytes');
         const reader = new FileReader();
 
         reader.onload = () => {
           if (wsRef.current?.readyState === WebSocket.OPEN) {
+            console.log('📨 Sending audio to server...');
             wsRef.current.send(JSON.stringify({
               type: 'audio-chunk',
               audioData: reader.result
@@ -200,6 +218,9 @@ export default function useVoiceAgent() {
             wsRef.current.send(JSON.stringify({
               type: 'speech-end'
             }));
+            console.log('✅ Audio sent, waiting for response...');
+          } else {
+            console.error('❌ WebSocket not open, cannot send audio');
           }
         };
 
@@ -210,14 +231,15 @@ export default function useVoiceAgent() {
       mediaRecorderRef.current = mediaRecorder;
 
       // Activate voice agent
+      console.log('📡 Sending activate message to server...');
       wsRef.current.send(JSON.stringify({ type: 'activate' }));
-      setIsListening(true);
+      setIsListening(false); // Not listening until user presses push-to-talk
       setError(null);
 
-      console.log('Voice agent activated');
+      console.log('✅ Voice agent activated - ready for push-to-talk');
     } catch (err) {
-      console.error('Error activating voice agent:', err);
-      setError('Microphone access denied or not available');
+      console.error('❌ Error activating voice agent:', err);
+      setError('Microphone access denied or not available: ' + err.message);
     }
   }, []);
 
@@ -239,22 +261,55 @@ export default function useVoiceAgent() {
 
   // Start recording (push-to-talk style)
   const startRecording = useCallback(() => {
-    if (!mediaRecorderRef.current) return;
-    if (mediaRecorderRef.current.state === 'recording') return;
+    console.log('🔴 START RECORDING called');
+    console.log('MediaRecorder exists:', !!mediaRecorderRef.current);
+    console.log('MediaRecorder state:', mediaRecorderRef.current?.state);
 
-    mediaRecorderRef.current.start();
-    setIsListening(true);
-    console.log('Started recording');
+    if (!mediaRecorderRef.current) {
+      console.error('❌ No media recorder available');
+      setError('Please activate voice agent first');
+      return;
+    }
+
+    if (mediaRecorderRef.current.state === 'recording') {
+      console.warn('⚠️ Already recording');
+      return;
+    }
+
+    try {
+      mediaRecorderRef.current.start();
+      setIsListening(true);
+      console.log('✅ Recording started');
+    } catch (err) {
+      console.error('❌ Failed to start recording:', err);
+      setError('Failed to start recording: ' + err.message);
+    }
   }, []);
 
   // Stop recording
   const stopRecording = useCallback(() => {
-    if (!mediaRecorderRef.current) return;
-    if (mediaRecorderRef.current.state !== 'recording') return;
+    console.log('⏹️ STOP RECORDING called');
+    console.log('MediaRecorder exists:', !!mediaRecorderRef.current);
+    console.log('MediaRecorder state:', mediaRecorderRef.current?.state);
 
-    mediaRecorderRef.current.stop();
-    setIsListening(false);
-    console.log('Stopped recording');
+    if (!mediaRecorderRef.current) {
+      console.error('❌ No media recorder available');
+      return;
+    }
+
+    if (mediaRecorderRef.current.state !== 'recording') {
+      console.warn('⚠️ Not currently recording, state:', mediaRecorderRef.current.state);
+      return;
+    }
+
+    try {
+      mediaRecorderRef.current.stop();
+      setIsListening(false);
+      console.log('✅ Recording stopped - audio will be sent to server');
+    } catch (err) {
+      console.error('❌ Failed to stop recording:', err);
+      setError('Failed to stop recording: ' + err.message);
+    }
   }, []);
 
   // Cleanup on unmount
