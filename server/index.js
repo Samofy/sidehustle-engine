@@ -52,6 +52,18 @@ app.use('/api/settings', settingsRoutes);
 
 // Serve static files from client build (production)
 const clientBuildPath = path.join(__dirname, '../client/dist');
+console.log('📁 Client build path:', clientBuildPath);
+console.log('📁 __dirname:', __dirname);
+
+// Check if dist exists
+import { existsSync, readdirSync } from 'fs';
+if (existsSync(clientBuildPath)) {
+  console.log('✅ Client dist folder exists');
+  console.log('📂 Contents:', readdirSync(clientBuildPath));
+} else {
+  console.log('❌ Client dist folder NOT FOUND!');
+}
+
 app.use(express.static(clientBuildPath));
 
 // SPA fallback - serve index.html for all non-API routes
