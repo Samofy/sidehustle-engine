@@ -1,5 +1,5 @@
-// Always use relative path - works on any domain (Railway, Vercel, localhost)
-const BASE = '/api';
+// Use Railway API URL in production, relative path in development
+const BASE = import.meta.env.VITE_API_URL || '/api';
 
 export { BASE as apiBase };
 
