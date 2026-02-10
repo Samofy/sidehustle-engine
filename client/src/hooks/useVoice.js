@@ -88,58 +88,30 @@ export default function useVoice() {
 
       if (!res.ok) throw new Error('TTS failed');
 
-      // For streaming audio, we collect chunks and start playback ASAP
-      const reader = res.body.getReader();
-      const chunks = [];
-      let audioStarted = false;
-      let audioUrl = null;
-
       // Stop any existing playback
       if (audioRef.current) {
         audioRef.current.pause();
+        audioRef.current = null;
       }
 
       setIsPlaying(true);
 
-      // Read stream and buffer chunks
+      // Read ALL chunks from stream before playing
+      const reader = res.body.getReader();
+      const chunks = [];
+
       while (true) {
         const { done, value } = await reader.read();
-
         if (value) {
           chunks.push(value);
-
-          // Start playback as soon as we have enough data (~3 chunks = ~30KB)
-          if (chunks.length === 3 && !audioStarted) {
-            audioStarted = true;
-
-            // Create blob from buffered chunks and start playing
-            const audioBlob = new Blob(chunks, { type: 'audio/mpeg' });
-            audioUrl = URL.createObjectURL(audioBlob);
-
-            const audio = new Audio(audioUrl);
-            audioRef.current = audio;
-
-            audio.onended = () => {
-              setIsPlaying(false);
-              if (audioUrl) URL.revokeObjectURL(audioUrl);
-            };
-
-            audio.onerror = () => {
-              setIsPlaying(false);
-              if (audioUrl) URL.revokeObjectURL(audioUrl);
-            };
-
-            await audio.play();
-          }
         }
-
         if (done) break;
       }
 
-      // If we didn't start playback yet (small audio), play the complete audio
-      if (!audioStarted && chunks.length > 0) {
+      // Now play the complete audio
+      if (chunks.length > 0) {
         const audioBlob = new Blob(chunks, { type: 'audio/mpeg' });
-        audioUrl = URL.createObjectURL(audioBlob);
+        const audioUrl = URL.createObjectURL(audioBlob);
 
         const audio = new Audio(audioUrl);
         audioRef.current = audio;
@@ -149,12 +121,15 @@ export default function useVoice() {
           URL.revokeObjectURL(audioUrl);
         };
 
-        audio.onerror = () => {
+        audio.onerror = (err) => {
           setIsPlaying(false);
           URL.revokeObjectURL(audioUrl);
+          console.error('Audio playback error:', err);
         };
 
         await audio.play();
+      } else {
+        setIsPlaying(false);
       }
     } catch (err) {
       setIsPlaying(false);

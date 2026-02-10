@@ -73,10 +73,18 @@ app.use(errorHandler);
 
 // Create HTTP server and setup WebSocket for voice agent
 const server = createServer(app);
-setupVoiceAgent(server);
+
+// Try to setup voice agent, but don't crash if it fails
+try {
+  setupVoiceAgent(server);
+} catch (err) {
+  console.error('⚠️  Voice agent setup failed:', err.message);
+  console.log('🔇 Voice agent will be disabled');
+}
 
 server.listen(PORT, () => {
   console.log(`🚀 SideHustle Engine API running on port ${PORT}`);
+  console.log(`📡 Server ready at http://localhost:${PORT}`);
 });
 
 export default app;
