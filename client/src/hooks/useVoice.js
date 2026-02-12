@@ -10,21 +10,26 @@ export default function useVoice() {
   const chunksRef = useRef([]);
   const audioRef = useRef(null);
 
+  const recordStartRef = useRef(null);
+
   const startRecording = useCallback(async () => {
     setError(null);
     setTranscript('');
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-      mediaRecorderRef.current = mediaRecorder;
+      let rec;
+      try { rec = new MediaRecorder(stream, { mimeType: 'audio/webm' }); }
+      catch { rec = new MediaRecorder(stream); }
+      mediaRecorderRef.current = rec;
       chunksRef.current = [];
 
-      mediaRecorder.ondataavailable = (e) => {
+      rec.ondataavailable = (e) => {
         if (e.data.size > 0) chunksRef.current.push(e.data);
       };
 
-      mediaRecorder.start(100); // Collect in 100ms chunks
+      rec.start(100);
+      recordStartRef.current = Date.now();
       setIsRecording(true);
     } catch (err) {
       if (err.name === 'NotAllowedError') {
@@ -45,13 +50,18 @@ export default function useVoice() {
 
       mediaRecorder.onstop = async () => {
         setIsRecording(false);
-
-        // Stop all tracks
         mediaRecorder.stream.getTracks().forEach(t => t.stop());
+
+        // Check minimum recording duration (500ms)
+        const duration = Date.now() - (recordStartRef.current || Date.now());
+        if (duration < 500 || chunksRef.current.length === 0) {
+          setError('Recording too short. Hold the mic button longer.');
+          resolve('');
+          return;
+        }
 
         const audioBlob = new Blob(chunksRef.current, { type: 'audio/webm' });
 
-        // Send to backend for transcription
         try {
           const res = await apiRawFetch('/voice/transcribe', {
             method: 'POST',
@@ -59,16 +69,24 @@ export default function useVoice() {
             body: audioBlob,
           });
 
+          if (!res.ok) {
+            const errData = await res.json().catch(() => ({}));
+            setError(errData.error || `Transcription failed (${res.status})`);
+            resolve('');
+            return;
+          }
+
           const data = await res.json();
           if (data.transcript) {
             setTranscript(data.transcript);
             resolve(data.transcript);
           } else {
-            setError('Could not understand audio. Try again or switch to text.');
+            setError('Could not understand audio. Try speaking louder or closer to the mic.');
             resolve('');
           }
         } catch (err) {
-          setError('Transcription failed. Switching to text.');
+          console.error('Transcription error:', err);
+          setError('Transcription failed. Check your connection and try again.');
           resolve('');
         }
       };

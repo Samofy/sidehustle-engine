@@ -1,12 +1,3 @@
-/**
- * Voice Agent WebSocket Handler
- *
- * Provides continuous voice conversation mode with:
- * - Voice activity detection
- * - Real-time transcription
- * - Streaming audio responses
- */
-
 import { WebSocketServer } from 'ws';
 import { transcribeAudio, textToSpeech, isVoiceEnabled } from './voiceService.js';
 import { assembleMentorContext, getConversationHistory } from '../services/mentorService.js';
@@ -14,300 +5,226 @@ import { buildSystemPrompt, callClaude } from '../ai/orchestrator.js';
 import pool from '../db/pool.js';
 import jwt from 'jsonwebtoken';
 
-const IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
-const MAX_AUDIO_CHUNK_SIZE = 1024 * 1024; // 1MB
+const IDLE_TIMEOUT = 5 * 60 * 1000;
 
-/**
- * Simple voice activity detection buffer
- */
-class VoiceActivityBuffer {
-  constructor() {
-    this.chunks = [];
-    this.isRecording = false;
-    this.silenceStart = null;
-    this.SILENCE_THRESHOLD = 1000; // 1 second of silence ends speech
-  }
-
-  feed(audioData) {
-    this.chunks.push(audioData);
-    this.isRecording = true;
-    this.silenceStart = null;
-  }
-
-  markSilence() {
-    if (this.isRecording && !this.silenceStart) {
-      this.silenceStart = Date.now();
-    }
-  }
-
-  isSpeechEnd() {
-    return this.isRecording &&
-           this.silenceStart &&
-           (Date.now() - this.silenceStart) > this.SILENCE_THRESHOLD;
-  }
-
-  getBuffer() {
-    return Buffer.concat(this.chunks);
-  }
-
-  reset() {
-    this.chunks = [];
-    this.isRecording = false;
-    this.silenceStart = null;
-  }
-
-  hasData() {
-    return this.chunks.length > 0;
-  }
+function safeSend(ws, data) {
+  if (ws.readyState === 1) ws.send(JSON.stringify(data));
 }
 
-/**
- * Authenticate WebSocket connection from token in query string
- */
 function authenticateWebSocket(req) {
   const url = new URL(req.url, 'ws://localhost');
   const token = url.searchParams.get('token');
+  if (!token) throw new Error('No authentication token');
+  const decoded = jwt.verify(token, process.env.JWT_SECRET);
+  return decoded.userId;
+}
 
-  if (!token) {
-    throw new Error('No authentication token provided');
+/**
+ * Process a single audio utterance: transcribe → Claude → streaming TTS
+ */
+async function processUtterance(ws, userId, audioBuffer) {
+  let interrupted = false;
+
+  // Listen for interrupt messages during processing
+  function onInterrupt(raw) {
+    try { if (JSON.parse(raw).type === 'interrupt') interrupted = true; } catch {}
   }
+  ws.on('message', onInterrupt);
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    return decoded.userId;
-  } catch (err) {
-    throw new Error('Invalid authentication token');
+    // 1. Transcribe
+    safeSend(ws, { type: 'transcribing' });
+    const transcript = await transcribeAudio(audioBuffer);
+
+    if (!transcript?.trim()) {
+      safeSend(ws, { type: 'error', message: 'Could not understand audio' });
+      return true; // stay active
+    }
+
+    console.log(`[voice] user ${userId}: "${transcript}"`);
+
+    // Check for deactivation commands
+    const lower = transcript.toLowerCase();
+    if (lower.includes('stop listening') || lower.includes('deactivate') || lower.includes('turn off')) {
+      safeSend(ws, { type: 'text-response', text: 'Voice agent deactivated.' });
+      safeSend(ws, { type: 'status', active: false });
+      return false; // deactivate
+    }
+
+    // 2. Store user message
+    await pool.query(
+      "INSERT INTO conversations (user_id, context_type, role, content, input_mode) VALUES ($1, 'mentor', 'user', $2, 'voice')",
+      [userId, transcript]
+    );
+
+    // 3. Build context
+    const userResult = await pool.query('SELECT preferred_model, mentor_personality FROM users WHERE id = $1', [userId]);
+    const preferredModel = userResult.rows[0]?.preferred_model || 'claude-sonnet-4-20250514';
+    const mentorPersonality = userResult.rows[0]?.mentor_personality || 'balanced';
+    const context = await assembleMentorContext(userId);
+    context.mentorPersonality = mentorPersonality;
+    const systemPrompt = buildSystemPrompt('mentor', context);
+    const history = await getConversationHistory(userId, 5);
+    const messages = [...history.map(h => ({ role: h.role, content: h.content })), { role: 'user', content: transcript }];
+
+    // 4. Stream Claude response + sentence-level TTS
+    safeSend(ws, { type: 'generating-response' });
+    safeSend(ws, { type: 'audio-start' });
+
+    let fullResponse = '';
+    let sentenceBuffer = '';
+    const ttsPromises = [];
+    let sendIndex = 0;
+    let allSentencesQueued = false;
+
+    // Background loop: send TTS audio in order as each resolves
+    const senderDone = (async () => {
+      while (true) {
+        if (interrupted) break;
+        if (sendIndex < ttsPromises.length) {
+          try {
+            const audio = await ttsPromises[sendIndex];
+            if (!interrupted) safeSend(ws, { type: 'sentence-audio', data: audio.toString('base64') });
+          } catch (err) {
+            console.error('[voice] TTS error:', err.message);
+          }
+          sendIndex++;
+        } else if (allSentencesQueued) {
+          break;
+        } else {
+          await new Promise(r => setTimeout(r, 30));
+        }
+      }
+    })();
+
+    // Stream Claude and detect sentences
+    await callClaude({
+      systemPrompt,
+      messages,
+      model: preferredModel,
+      maxTokens: 1024,
+      onChunk: (chunk) => {
+        if (interrupted) return;
+        fullResponse += chunk;
+        sentenceBuffer += chunk;
+        safeSend(ws, { type: 'text-chunk', text: chunk });
+
+        // Extract all complete sentences from buffer
+        while (!interrupted) {
+          const idx = sentenceBuffer.search(/[.!?]\s|\n\n/);
+          if (idx < 0) break;
+          const sentence = sentenceBuffer.slice(0, idx + 1).trim();
+          sentenceBuffer = sentenceBuffer.slice(idx + 1).trimStart();
+          if (sentence.length > 3) {
+            ttsPromises.push(textToSpeech(sentence));
+          }
+        }
+      }
+    });
+
+    // Handle remaining text
+    if (sentenceBuffer.trim().length > 0 && !interrupted) {
+      ttsPromises.push(textToSpeech(sentenceBuffer.trim()));
+    }
+    allSentencesQueued = true;
+
+    // Wait for all audio to be sent
+    await senderDone;
+
+    // Send complete text and audio-end
+    safeSend(ws, { type: 'text-response', text: fullResponse });
+    if (!interrupted) safeSend(ws, { type: 'audio-end' });
+
+    // 5. Store assistant response
+    await pool.query(
+      "INSERT INTO conversations (user_id, context_type, role, content) VALUES ($1, 'mentor', 'assistant', $2)",
+      [userId, fullResponse]
+    );
+
+    return true; // stay active
+
+  } finally {
+    ws.removeListener('message', onInterrupt);
   }
 }
 
-/**
- * Generate mentor response for voice agent
- */
-async function generateVoiceResponse(userId, transcript) {
-  // Store user message
-  await pool.query(
-    "INSERT INTO conversations (user_id, context_type, role, content, input_mode) VALUES ($1, 'mentor', 'user', $2, 'voice')",
-    [userId, transcript]
-  );
-
-  // Get user's preferred model and mentor personality
-  const userResult = await pool.query(
-    'SELECT preferred_model, mentor_personality FROM users WHERE id = $1',
-    [userId]
-  );
-  const preferredModel = userResult.rows[0]?.preferred_model || 'claude-sonnet-4-20250514';
-  const mentorPersonality = userResult.rows[0]?.mentor_personality || 'balanced';
-
-  // Build context (lightweight for voice mode - no full history)
-  const context = await assembleMentorContext(userId);
-  context.mentorPersonality = mentorPersonality;
-
-  const systemPrompt = buildSystemPrompt('mentor', context);
-
-  // Get recent conversation history (only last 5 messages for voice mode)
-  const history = await getConversationHistory(userId, 5);
-  const messages = [
-    ...history.map(h => ({ role: h.role, content: h.content })),
-    { role: 'user', content: transcript }
-  ];
-
-  // Stream response
-  let fullResponse = '';
-
-  await callClaude({
-    systemPrompt,
-    messages,
-    model: preferredModel,
-    maxTokens: 1024, // Shorter responses for voice
-    onChunk: (chunk) => {
-      fullResponse += chunk;
-    }
-  });
-
-  // Store assistant response
-  await pool.query(
-    "INSERT INTO conversations (user_id, context_type, role, content) VALUES ($1, 'mentor', 'assistant', $2)",
-    [userId, fullResponse]
-  );
-
-  return fullResponse;
-}
-
-/**
- * Setup WebSocket server for voice agent
- */
 export function setupVoiceAgent(server) {
   if (!isVoiceEnabled()) {
-    console.log('⚠️  Voice agent disabled - voice services not configured');
+    console.log('Voice agent disabled — missing API keys');
     return;
   }
 
-  const wss = new WebSocketServer({
-    server,
-    path: '/voice-agent',
-    maxPayload: MAX_AUDIO_CHUNK_SIZE
-  });
+  const wss = new WebSocketServer({ server, path: '/voice-agent', maxPayload: 2 * 1024 * 1024 });
 
   wss.on('connection', async (ws, req) => {
-    let userId = null;
-    let isActive = false;
-    let vadBuffer = new VoiceActivityBuffer();
-    let idleTimer = null;
-
-    // Authenticate connection
+    let userId;
     try {
       userId = authenticateWebSocket(req);
-      console.log(`✅ Voice agent connected: user ${userId}`);
     } catch (err) {
-      console.error('Voice agent auth failed:', err.message);
-      ws.close(1008, 'Authentication failed');
+      ws.close(1008, 'Auth failed');
       return;
     }
 
-    // Reset idle timer
-    function resetIdleTimer() {
+    let isActive = false;
+    let idleTimer = null;
+    let processing = false;
+
+    function resetIdle() {
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
         if (isActive) {
-          ws.send(JSON.stringify({
-            type: 'status',
-            message: 'Deactivated due to inactivity'
-          }));
           isActive = false;
+          safeSend(ws, { type: 'status', active: false, message: 'Deactivated due to inactivity' });
         }
       }, IDLE_TIMEOUT);
     }
 
-    // Handle incoming messages
-    ws.on('message', async (data) => {
-      try {
-        const message = JSON.parse(data);
+    ws.on('message', async (raw) => {
+      let msg;
+      try { msg = JSON.parse(raw); } catch { return; }
 
-        // Activation
-        if (message.type === 'activate') {
-          isActive = true;
-          resetIdleTimer();
-          ws.send(JSON.stringify({ type: 'status', active: true }));
-          console.log(`🎤 Voice agent activated: user ${userId}`);
-        }
-
-        // Deactivation
-        else if (message.type === 'deactivate') {
-          isActive = false;
-          vadBuffer.reset();
-          if (idleTimer) clearTimeout(idleTimer);
-          ws.send(JSON.stringify({ type: 'status', active: false }));
-          console.log(`🔇 Voice agent deactivated: user ${userId}`);
-        }
-
-        // Audio chunk received
-        else if (message.type === 'audio-chunk' && isActive) {
-          resetIdleTimer();
-
-          // Decode base64 audio data
-          const audioData = Buffer.from(message.audioData.split(',')[1], 'base64');
-          vadBuffer.feed(audioData);
-
-          // Check if speech ended (simple timeout-based VAD)
-          // In production, you'd use a proper VAD library or service
-        }
-
-        // Speech end signal from client
-        else if (message.type === 'speech-end' && isActive) {
-          if (!vadBuffer.hasData()) return;
-
-          const audioBuffer = vadBuffer.getBuffer();
-          vadBuffer.reset();
-
-          // Transcribe audio
-          ws.send(JSON.stringify({ type: 'transcribing' }));
-          const transcript = await transcribeAudio(audioBuffer);
-
-          if (!transcript || transcript.trim().length === 0) {
-            ws.send(JSON.stringify({
-              type: 'error',
-              message: 'Could not understand audio'
-            }));
-            return;
-          }
-
-          console.log(`📝 Transcribed: "${transcript}"`);
-
-          // Check for exit commands
-          const lowerTranscript = transcript.toLowerCase();
-          if (lowerTranscript.includes('stop listening') ||
-              lowerTranscript.includes('deactivate') ||
-              lowerTranscript.includes('turn off')) {
-            isActive = false;
-            ws.send(JSON.stringify({ type: 'status', active: false }));
-            ws.send(JSON.stringify({
-              type: 'text-response',
-              text: 'Voice agent deactivated.'
-            }));
-            return;
-          }
-
-          // Generate mentor response
-          ws.send(JSON.stringify({ type: 'generating-response' }));
-          const response = await generateVoiceResponse(userId, transcript);
-
-          ws.send(JSON.stringify({
-            type: 'text-response',
-            text: response
-          }));
-
-          // Generate and stream audio response
-          ws.send(JSON.stringify({ type: 'audio-start' }));
-
-          try {
-            const audioBuffer = await textToSpeech(response);
-
-            // Send audio in chunks
-            const chunkSize = 4096;
-            for (let i = 0; i < audioBuffer.length; i += chunkSize) {
-              const chunk = audioBuffer.slice(i, i + chunkSize);
-              ws.send(JSON.stringify({
-                type: 'audio-chunk',
-                data: chunk.toString('base64'),
-                isLast: i + chunkSize >= audioBuffer.length
-              }));
-            }
-
-            ws.send(JSON.stringify({ type: 'audio-end' }));
-          } catch (err) {
-            console.error('TTS error:', err);
-            ws.send(JSON.stringify({
-              type: 'error',
-              message: 'Could not generate audio response'
-            }));
-          }
-        }
-      } catch (err) {
-        console.error('Voice agent message error:', err);
-        ws.send(JSON.stringify({
-          type: 'error',
-          message: 'An error occurred processing your request'
-        }));
+      if (msg.type === 'activate') {
+        isActive = true;
+        processing = false;
+        resetIdle();
+        safeSend(ws, { type: 'status', active: true });
+        console.log(`[voice] activated: user ${userId}`);
       }
+
+      else if (msg.type === 'deactivate') {
+        isActive = false;
+        if (idleTimer) clearTimeout(idleTimer);
+        safeSend(ws, { type: 'status', active: false });
+      }
+
+      else if (msg.type === 'audio-data' && isActive && !processing) {
+        resetIdle();
+        processing = true;
+
+        try {
+          const audioData = Buffer.from(msg.audioData.split(',')[1], 'base64');
+          const stayActive = await processUtterance(ws, userId, audioData);
+          if (!stayActive) isActive = false;
+        } catch (err) {
+          console.error('[voice] processing error:', err);
+          safeSend(ws, { type: 'error', message: 'Something went wrong. Try again.' });
+        } finally {
+          processing = false;
+        }
+      }
+
+      // 'interrupt' is handled inside processUtterance
     });
 
-    // Handle disconnection
     ws.on('close', () => {
       if (idleTimer) clearTimeout(idleTimer);
-      console.log(`👋 Voice agent disconnected: user ${userId}`);
     });
 
-    // Handle errors
-    ws.on('error', (err) => {
-      console.error('Voice agent WebSocket error:', err);
-    });
+    ws.on('error', (err) => console.error('[voice] WS error:', err.message));
 
-    // Send welcome message
-    ws.send(JSON.stringify({
-      type: 'connected',
-      message: 'Voice agent ready. Send "activate" to begin.'
-    }));
+    safeSend(ws, { type: 'connected', message: 'Voice agent ready' });
+    console.log(`[voice] connected: user ${userId}`);
   });
 
-  console.log('🎙️  Voice agent WebSocket server initialized at /voice-agent');
+  console.log('Voice agent WebSocket initialized at /voice-agent');
 }

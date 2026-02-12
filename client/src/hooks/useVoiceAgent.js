@@ -1,334 +1,242 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { getWsBase } from '../utils/api';
 
+const SILENCE_THRESHOLD = 15;
+const SILENCE_DURATION = 1500;
+const MAX_RECORD_MS = 30000;
+
 export default function useVoiceAgent() {
   const [isConnected, setIsConnected] = useState(false);
   const [isActive, setIsActive] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState(null);
-  const [lastTranscript, setLastTranscript] = useState('');
   const [lastResponse, setLastResponse] = useState('');
+  const [streamingText, setStreamingText] = useState('');
 
   const wsRef = useRef(null);
+  const streamRef = useRef(null);
   const mediaRecorderRef = useRef(null);
-  const audioContextRef = useRef(null);
-  const audioChunksRef = useRef([]);
+  const audioCtxRef = useRef(null);
+  const analyserRef = useRef(null);
+  const vadRef = useRef(null);
+  const isActiveRef = useRef(false);
+  const speechRef = useRef(false);
+  const silenceStartRef = useRef(null);
+  const recordStartRef = useRef(null);
 
-  // Get WebSocket URL — must point to Railway, not Vercel (Vercel doesn't support WS)
-  const getWsUrl = useCallback(() => {
-    const token = localStorage.getItem('token');
-    const wsUrl = `${getWsBase()}/voice-agent?token=${token}`;
-    console.log('🔗 Connecting to voice agent:', wsUrl);
-    return wsUrl;
-  }, []);
+  // Audio playback queue
+  const queueRef = useRef([]);
+  const playingRef = useRef(null);
+  const speakingRef = useRef(false);
 
-  // Connect to voice agent
-  const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      console.log('Already connected');
+  // --- Audio playback ---
+  const playNext = useCallback(() => {
+    if (queueRef.current.length === 0) {
+      playingRef.current = null;
+      speakingRef.current = false;
+      setIsSpeaking(false);
       return;
     }
+    const b64 = queueRef.current.shift();
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    const blob = new Blob([bytes], { type: 'audio/mpeg' });
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    playingRef.current = audio;
+    audio.onended = () => { URL.revokeObjectURL(url); playNext(); };
+    audio.onerror = () => { URL.revokeObjectURL(url); playNext(); };
+    audio.play().catch(() => playNext());
+  }, []);
 
-    const ws = new WebSocket(getWsUrl());
-
-    ws.onopen = () => {
-      setIsConnected(true);
-      setError(null);
-      console.log('Voice agent connected');
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-
-        switch (message.type) {
-          case 'connected':
-            console.log('Voice agent ready');
-            break;
-
-          case 'status':
-            setIsActive(message.active);
-            if (message.message) {
-              console.log(message.message);
-            }
-            break;
-
-          case 'transcribing':
-            setIsListening(false);
-            console.log('Transcribing audio...');
-            break;
-
-          case 'generating-response':
-            console.log('Generating response...');
-            break;
-
-          case 'text-response':
-            setLastResponse(message.text);
-            console.log('Response:', message.text);
-            break;
-
-          case 'audio-start':
-            setIsSpeaking(true);
-            audioChunksRef.current = [];
-            break;
-
-          case 'audio-chunk':
-            // Accumulate audio chunks
-            const chunk = Uint8Array.from(atob(message.data), c => c.charCodeAt(0));
-            audioChunksRef.current.push(chunk);
-
-            if (message.isLast) {
-              playAudioChunks();
-            }
-            break;
-
-          case 'audio-end':
-            setIsSpeaking(false);
-            setIsListening(true);
-            break;
-
-          case 'error':
-            setError(message.message);
-            console.error('Voice agent error:', message.message);
-            break;
-
-          default:
-            console.log('Unknown message type:', message.type);
-        }
-      } catch (err) {
-        console.error('Error parsing WebSocket message:', err);
-      }
-    };
-
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-      setError('Connection error occurred');
-    };
-
-    ws.onclose = () => {
-      setIsConnected(false);
-      setIsActive(false);
-      setIsListening(false);
-      console.log('Voice agent disconnected');
-    };
-
-    wsRef.current = ws;
-  }, [getWsUrl]);
-
-  // Disconnect from voice agent
-  const disconnect = useCallback(() => {
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
+  const queueAudio = useCallback((b64) => {
+    queueRef.current.push(b64);
+    if (!speakingRef.current) {
+      speakingRef.current = true;
+      setIsSpeaking(true);
+      playNext();
     }
-    if (mediaRecorderRef.current) {
-      mediaRecorderRef.current.stop();
-      mediaRecorderRef.current = null;
+  }, [playNext]);
+
+  const interruptPlayback = useCallback(() => {
+    if (playingRef.current) { playingRef.current.pause(); playingRef.current = null; }
+    queueRef.current = [];
+    speakingRef.current = false;
+    setIsSpeaking(false);
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'interrupt' }));
     }
-    setIsConnected(false);
-    setIsActive(false);
+  }, []);
+
+  // --- Send audio to server ---
+  const sendAudio = useCallback((blob) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      wsRef.current.send(JSON.stringify({ type: 'audio-data', audioData: reader.result }));
+    };
+    reader.readAsDataURL(blob);
+    setIsProcessing(true);
     setIsListening(false);
   }, []);
 
-  // Play accumulated audio chunks
-  const playAudioChunks = useCallback(async () => {
+  // --- Recording segments ---
+  const startSegment = useCallback(() => {
+    if (!streamRef.current || !isActiveRef.current) return;
+    const chunks = [];
+    let rec;
     try {
-      if (audioChunksRef.current.length === 0) return;
-
-      // Combine all chunks into single buffer
-      const totalLength = audioChunksRef.current.reduce((sum, chunk) => sum + chunk.length, 0);
-      const combinedBuffer = new Uint8Array(totalLength);
-      let offset = 0;
-      for (const chunk of audioChunksRef.current) {
-        combinedBuffer.set(chunk, offset);
-        offset += chunk.length;
+      rec = new MediaRecorder(streamRef.current, { mimeType: 'audio/webm' });
+    } catch {
+      rec = new MediaRecorder(streamRef.current);
+    }
+    rec.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+    rec.onstop = () => {
+      if (chunks.length > 0 && speechRef.current) {
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        if (blob.size > 500) sendAudio(blob);
       }
+      speechRef.current = false;
+      silenceStartRef.current = null;
+      if (isActiveRef.current) setTimeout(() => startSegment(), 50);
+    };
+    rec.start(100);
+    mediaRecorderRef.current = rec;
+    recordStartRef.current = Date.now();
+    setIsListening(true);
+  }, [sendAudio]);
 
-      // Create blob and play
-      const audioBlob = new Blob([combinedBuffer], { type: 'audio/mpeg' });
-      const audioUrl = URL.createObjectURL(audioBlob);
-      const audio = new Audio(audioUrl);
+  // --- VAD ---
+  const startVAD = useCallback(() => {
+    if (!analyserRef.current) return;
+    const analyser = analyserRef.current;
+    const buf = new Uint8Array(analyser.fftSize);
 
-      audio.onended = () => {
-        URL.revokeObjectURL(audioUrl);
-      };
+    vadRef.current = setInterval(() => {
+      if (!isActiveRef.current) return;
+      analyser.getByteTimeDomainData(buf);
+      let max = 0;
+      for (let i = 0; i < buf.length; i++) max = Math.max(max, Math.abs(buf[i] - 128));
 
-      await audio.play();
-    } catch (err) {
-      console.error('Error playing audio:', err);
-      setError('Could not play audio response');
+      if (max > SILENCE_THRESHOLD) {
+        if (!speechRef.current) {
+          speechRef.current = true;
+          if (speakingRef.current) interruptPlayback();
+        }
+        silenceStartRef.current = null;
+      } else if (speechRef.current) {
+        if (!silenceStartRef.current) silenceStartRef.current = Date.now();
+        const silenceMs = Date.now() - silenceStartRef.current;
+        const recordMs = Date.now() - (recordStartRef.current || Date.now());
+        if (silenceMs >= SILENCE_DURATION || recordMs >= MAX_RECORD_MS) {
+          if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
+        }
+      }
+    }, 50);
+  }, [interruptPlayback]);
+
+  // --- WebSocket ---
+  const connect = useCallback(() => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    const token = localStorage.getItem('token');
+    const ws = new WebSocket(`${getWsBase()}/voice-agent?token=${token}`);
+
+    ws.onopen = () => { setIsConnected(true); setError(null); };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        switch (msg.type) {
+          case 'connected': break;
+          case 'status':
+            if (typeof msg.active === 'boolean') { isActiveRef.current = msg.active; setIsActive(msg.active); }
+            break;
+          case 'transcribing': setIsProcessing(true); break;
+          case 'generating-response': setIsProcessing(true); setStreamingText(''); break;
+          case 'text-chunk': setStreamingText(prev => prev + msg.text); break;
+          case 'text-response':
+            setLastResponse(msg.text); setStreamingText(''); setIsProcessing(false);
+            break;
+          case 'sentence-audio': queueAudio(msg.data); break;
+          case 'audio-end': break;
+          case 'error': setError(msg.message); setIsProcessing(false); break;
+        }
+      } catch (err) { console.error('WS parse error:', err); }
+    };
+
+    ws.onerror = () => setError('Voice connection error');
+    ws.onclose = () => {
+      setIsConnected(false); setIsActive(false); isActiveRef.current = false; setIsListening(false);
+    };
+    wsRef.current = ws;
+  }, [queueAudio]);
+
+  // --- Stop everything ---
+  const stopAll = useCallback(() => {
+    if (vadRef.current) { clearInterval(vadRef.current); vadRef.current = null; }
+    if (mediaRecorderRef.current?.state === 'recording') {
+      speechRef.current = false; // prevent sending partial audio
+      mediaRecorderRef.current.stop();
     }
+    mediaRecorderRef.current = null;
+    if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
+    if (audioCtxRef.current) { audioCtxRef.current.close().catch(() => {}); audioCtxRef.current = null; }
+    analyserRef.current = null;
+    if (playingRef.current) { playingRef.current.pause(); playingRef.current = null; }
+    queueRef.current = [];
+    speakingRef.current = false;
+    setIsSpeaking(false);
+    setIsListening(false);
+    setIsActive(false);
+    setIsProcessing(false);
+    isActiveRef.current = false;
   }, []);
 
-  // Activate voice agent
+  const disconnect = useCallback(() => {
+    if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+    stopAll();
+  }, [stopAll]);
+
+  // --- Activate / Deactivate ---
   const activate = useCallback(async () => {
-    console.log('🎙️ Activating voice agent...');
-    console.log('WebSocket state:', wsRef.current?.readyState);
-
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      const errorMsg = 'Not connected to voice agent. Connection state: ' + (wsRef.current?.readyState || 'null');
-      console.error('❌', errorMsg);
-      setError(errorMsg);
-      return;
+      setError('Not connected'); return;
     }
-
     try {
-      console.log('🎤 Requesting microphone access...');
-      // Request microphone access
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      console.log('✅ Microphone access granted');
+      streamRef.current = stream;
+      const ctx = new AudioContext();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      ctx.createMediaStreamSource(stream).connect(analyser);
+      audioCtxRef.current = ctx;
+      analyserRef.current = analyser;
 
-      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-
-      let audioChunks = [];
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          console.log('📦 Audio chunk received:', event.data.size, 'bytes');
-          audioChunks.push(event.data);
-        }
-      };
-
-      // Send audio when recorder stops
-      mediaRecorder.onstop = async () => {
-        console.log('🛑 Recording stopped, total chunks:', audioChunks.length);
-        if (audioChunks.length === 0) {
-          console.warn('⚠️ No audio chunks to send');
-          return;
-        }
-
-        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-        console.log('📤 Sending audio blob:', audioBlob.size, 'bytes');
-        const reader = new FileReader();
-
-        reader.onload = () => {
-          if (wsRef.current?.readyState === WebSocket.OPEN) {
-            console.log('📨 Sending audio to server...');
-            wsRef.current.send(JSON.stringify({
-              type: 'audio-chunk',
-              audioData: reader.result
-            }));
-
-            // Signal speech end
-            wsRef.current.send(JSON.stringify({
-              type: 'speech-end'
-            }));
-            console.log('✅ Audio sent, waiting for response...');
-          } else {
-            console.error('❌ WebSocket not open, cannot send audio');
-          }
-        };
-
-        reader.readAsDataURL(audioBlob);
-        audioChunks = [];
-      };
-
-      mediaRecorderRef.current = mediaRecorder;
-
-      // Activate voice agent
-      console.log('📡 Sending activate message to server...');
       wsRef.current.send(JSON.stringify({ type: 'activate' }));
-      setIsListening(false); // Not listening until user presses push-to-talk
+      isActiveRef.current = true;
+      setIsActive(true);
       setError(null);
-
-      console.log('✅ Voice agent activated - ready for push-to-talk');
-    } catch (err) {
-      console.error('❌ Error activating voice agent:', err);
-      setError('Microphone access denied or not available: ' + err.message);
+      startSegment();
+      startVAD();
+    } catch {
+      setError('Microphone access denied');
     }
-  }, []);
+  }, [startSegment, startVAD]);
 
-  // Deactivate voice agent
   const deactivate = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'deactivate' }));
     }
+    stopAll();
+  }, [stopAll]);
 
-    if (mediaRecorderRef.current) {
-      mediaRecorderRef.current.stop();
-      mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
-      mediaRecorderRef.current = null;
-    }
-
-    setIsListening(false);
-    setIsActive(false);
-  }, []);
-
-  // Start recording (push-to-talk style)
-  const startRecording = useCallback(() => {
-    console.log('🔴 START RECORDING called');
-    console.log('MediaRecorder exists:', !!mediaRecorderRef.current);
-    console.log('MediaRecorder state:', mediaRecorderRef.current?.state);
-
-    if (!mediaRecorderRef.current) {
-      console.error('❌ No media recorder available');
-      setError('Please activate voice agent first');
-      return;
-    }
-
-    if (mediaRecorderRef.current.state === 'recording') {
-      console.warn('⚠️ Already recording');
-      return;
-    }
-
-    try {
-      mediaRecorderRef.current.start();
-      setIsListening(true);
-      console.log('✅ Recording started');
-    } catch (err) {
-      console.error('❌ Failed to start recording:', err);
-      setError('Failed to start recording: ' + err.message);
-    }
-  }, []);
-
-  // Stop recording
-  const stopRecording = useCallback(() => {
-    console.log('⏹️ STOP RECORDING called');
-    console.log('MediaRecorder exists:', !!mediaRecorderRef.current);
-    console.log('MediaRecorder state:', mediaRecorderRef.current?.state);
-
-    if (!mediaRecorderRef.current) {
-      console.error('❌ No media recorder available');
-      return;
-    }
-
-    if (mediaRecorderRef.current.state !== 'recording') {
-      console.warn('⚠️ Not currently recording, state:', mediaRecorderRef.current.state);
-      return;
-    }
-
-    try {
-      mediaRecorderRef.current.stop();
-      setIsListening(false);
-      console.log('✅ Recording stopped - audio will be sent to server');
-    } catch (err) {
-      console.error('❌ Failed to stop recording:', err);
-      setError('Failed to stop recording: ' + err.message);
-    }
-  }, []);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      disconnect();
-    };
-  }, [disconnect]);
+  useEffect(() => { return () => { stopAll(); if (wsRef.current) wsRef.current.close(); }; }, [stopAll]);
 
   return {
-    isConnected,
-    isActive,
-    isListening,
-    isSpeaking,
-    error,
-    lastTranscript,
-    lastResponse,
-    connect,
-    disconnect,
-    activate,
-    deactivate,
-    startRecording,
-    stopRecording,
+    isConnected, isActive, isListening, isSpeaking, isProcessing,
+    error, lastResponse, streamingText,
+    connect, disconnect, activate, deactivate,
     clearError: () => setError(null),
   };
 }

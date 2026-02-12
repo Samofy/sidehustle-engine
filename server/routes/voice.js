@@ -17,13 +17,15 @@ router.post('/transcribe', authMiddleware, async (req, res, next) => {
     }
 
     const audioBuffer = req.body;
-    if (!audioBuffer || !audioBuffer.length) {
-      return res.status(400).json({ error: 'No audio data received.' });
+    if (!audioBuffer || !Buffer.isBuffer(audioBuffer) || audioBuffer.length < 100) {
+      console.error('[transcribe] Bad body — type:', typeof audioBuffer, 'isBuffer:', Buffer.isBuffer(audioBuffer), 'length:', audioBuffer?.length);
+      return res.status(400).json({ error: 'No audio data received. Hold the mic button for at least 1 second.' });
     }
 
     const transcript = await transcribeAudio(audioBuffer);
-    res.json({ transcript });
+    res.json({ transcript: transcript || '' });
   } catch (err) {
+    console.error('[transcribe] Error:', err.message);
     next(err);
   }
 });
