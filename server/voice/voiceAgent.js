@@ -37,7 +37,7 @@ async function processUtterance(ws, userId, audioBuffer) {
     const transcript = await transcribeAudio(audioBuffer);
 
     if (!transcript?.trim()) {
-      safeSend(ws, { type: 'error', message: 'Could not understand audio' });
+      safeSend(ws, { type: 'listening' });
       return true; // stay active
     }
 
@@ -183,7 +183,11 @@ export function setupVoiceAgent(server) {
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
 
-      if (msg.type === 'activate') {
+      if (msg.type === 'ping') {
+        safeSend(ws, { type: 'pong' });
+      }
+
+      else if (msg.type === 'activate') {
         isActive = true;
         processing = false;
         resetIdle();
@@ -216,7 +220,13 @@ export function setupVoiceAgent(server) {
       // 'interrupt' is handled inside processUtterance
     });
 
+    // Keep-alive ping to prevent proxy timeouts (Railway, etc.)
+    const pingInterval = setInterval(() => {
+      if (ws.readyState === 1) ws.ping();
+    }, 30000);
+
     ws.on('close', () => {
+      clearInterval(pingInterval);
       if (idleTimer) clearTimeout(idleTimer);
     });
 

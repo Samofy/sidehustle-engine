@@ -1,9 +1,11 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { getWsBase } from '../utils/api';
 
-const SILENCE_THRESHOLD = 15;
+const SILENCE_THRESHOLD = 25;
 const SILENCE_DURATION = 1500;
 const MAX_RECORD_MS = 30000;
+const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 15000];
+const HEARTBEAT_MS = 25000;
 
 export default function useVoiceAgent() {
   const [isConnected, setIsConnected] = useState(false);
@@ -30,6 +32,15 @@ export default function useVoiceAgent() {
   const queueRef = useRef([]);
   const playingRef = useRef(null);
   const speakingRef = useRef(false);
+
+  // Reconnection state
+  const manualCloseRef = useRef(false);
+  const reconnectRef = useRef(0);
+  const reconnectTimerRef = useRef(null);
+  const heartbeatRef = useRef(null);
+  const wasActiveRef = useRef(false);
+  const activateRef = useRef(null);
+  const connectRef = useRef(null);
 
   // --- Audio playback ---
   const playNext = useCallback(() => {
@@ -84,24 +95,38 @@ export default function useVoiceAgent() {
   // --- Recording segments ---
   const startSegment = useCallback(() => {
     if (!streamRef.current || !isActiveRef.current) return;
+
+    // Verify audio track is still active
+    const tracks = streamRef.current.getAudioTracks();
+    if (tracks.length === 0 || tracks[0].readyState === 'ended') return;
+
     const chunks = [];
     let rec;
     try {
       rec = new MediaRecorder(streamRef.current, { mimeType: 'audio/webm' });
     } catch {
-      rec = new MediaRecorder(streamRef.current);
+      try { rec = new MediaRecorder(streamRef.current); }
+      catch { return; }
     }
     rec.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
     rec.onstop = () => {
       if (chunks.length > 0 && speechRef.current) {
-        const blob = new Blob(chunks, { type: 'audio/webm' });
+        const blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' });
         if (blob.size > 500) sendAudio(blob);
       }
       speechRef.current = false;
       silenceStartRef.current = null;
       if (isActiveRef.current) setTimeout(() => startSegment(), 50);
     };
-    rec.start(100);
+    rec.onerror = () => {
+      if (isActiveRef.current) setTimeout(() => startSegment(), 200);
+    };
+    try {
+      rec.start(100);
+    } catch {
+      if (isActiveRef.current) setTimeout(() => startSegment(), 200);
+      return;
+    }
     mediaRecorderRef.current = rec;
     recordStartRef.current = Date.now();
     setIsListening(true);
@@ -138,17 +163,36 @@ export default function useVoiceAgent() {
 
   // --- WebSocket ---
   const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) return;
+    manualCloseRef.current = false;
+
     const token = localStorage.getItem('token');
     const ws = new WebSocket(`${getWsBase()}/voice-agent?token=${token}`);
 
-    ws.onopen = () => { setIsConnected(true); setError(null); };
+    ws.onopen = () => {
+      setIsConnected(true);
+      setError(null);
+      reconnectRef.current = 0;
+
+      // Heartbeat to prevent proxy timeouts
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      heartbeatRef.current = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
+      }, HEARTBEAT_MS);
+
+      // Re-activate if was active before disconnect
+      if (wasActiveRef.current) {
+        wasActiveRef.current = false;
+        setTimeout(() => activateRef.current?.(), 300);
+      }
+    };
 
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
         switch (msg.type) {
           case 'connected': break;
+          case 'pong': break;
           case 'status':
             if (typeof msg.active === 'boolean') { isActiveRef.current = msg.active; setIsActive(msg.active); }
             break;
@@ -160,15 +204,32 @@ export default function useVoiceAgent() {
             break;
           case 'sentence-audio': queueAudio(msg.data); break;
           case 'audio-end': break;
+          case 'listening': setIsProcessing(false); setIsListening(true); break;
           case 'error': setError(msg.message); setIsProcessing(false); break;
         }
       } catch (err) { console.error('WS parse error:', err); }
     };
 
     ws.onerror = () => setError('Voice connection error');
+
     ws.onclose = () => {
+      if (wsRef.current !== ws) return; // stale close
+      const wasActive = isActiveRef.current;
       setIsConnected(false); setIsActive(false); isActiveRef.current = false; setIsListening(false);
+      if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
+
+      // Auto-reconnect unless manually closed
+      if (!manualCloseRef.current) {
+        wasActiveRef.current = wasActive;
+        const attempt = reconnectRef.current;
+        const delay = RECONNECT_DELAYS[Math.min(attempt, RECONNECT_DELAYS.length - 1)];
+        reconnectTimerRef.current = setTimeout(() => {
+          reconnectRef.current++;
+          connectRef.current?.();
+        }, delay);
+      }
     };
+
     wsRef.current = ws;
   }, [queueAudio]);
 
@@ -194,6 +255,9 @@ export default function useVoiceAgent() {
   }, []);
 
   const disconnect = useCallback(() => {
+    manualCloseRef.current = true;
+    if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
+    if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
     if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
     stopAll();
   }, [stopAll]);
@@ -231,7 +295,19 @@ export default function useVoiceAgent() {
     stopAll();
   }, [stopAll]);
 
-  useEffect(() => { return () => { stopAll(); if (wsRef.current) wsRef.current.close(); }; }, [stopAll]);
+  // Keep refs in sync for reconnection callbacks
+  connectRef.current = connect;
+  activateRef.current = activate;
+
+  useEffect(() => {
+    return () => {
+      manualCloseRef.current = true;
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      stopAll();
+      if (wsRef.current) wsRef.current.close();
+    };
+  }, [stopAll]);
 
   return {
     isConnected, isActive, isListening, isSpeaking, isProcessing,
